@@ -77,14 +77,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
+      { title: "MEXC Predictive Accumulation Scanner" },
+      { name: "description", content: "Stage-based MEXC altcoin scanner detecting quiet accumulation, volatility compression and breakout readiness, with Telegram alerts every 5 minutes." },
       { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { property: "og:title", content: "MEXC Predictive Accumulation Scanner" },
+      { property: "og:description", content: "Stage-based MEXC altcoin scanner detecting quiet accumulation, volatility compression and breakout readiness, with Telegram alerts every 5 minutes." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "MEXC Predictive Accumulation Scanner" },
+      { name: "twitter:description", content: "Stage-based MEXC altcoin scanner detecting quiet accumulation, volatility compression and breakout readiness, with Telegram alerts every 5 minutes." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e29f6446-d2f3-44b5-9256-af2d3b4cef58/id-preview-ac62219d--aec536ce-1436-47a1-8de7-49d6caa3be65.lovable.app-1785784327958.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e29f6446-d2f3-44b5-9256-af2d3b4cef58/id-preview-ac62219d--aec536ce-1436-47a1-8de7-49d6caa3be65.lovable.app-1785784327958.png" },
     ],
     links: [
       {

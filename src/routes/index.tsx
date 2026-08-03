@@ -23,7 +23,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Early-stage pump detection on MEXC: hard risk gates, predictive scoring and Telegram alerts.",
+          "Stage-based MEXC altcoin scanner detecting quiet accumulation, volatility compression and breakout readiness, with Telegram alerts every 5 minutes.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
