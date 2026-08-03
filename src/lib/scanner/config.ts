@@ -37,6 +37,6 @@ export const SCANNER_CONFIG = {
     UNIVERSE_SIZE: 150,
     DEPTH_CANDIDATES: 25,
   },
-} as const;
+};
 
 export type ScannerConfig = typeof SCANNER_CONFIG;
