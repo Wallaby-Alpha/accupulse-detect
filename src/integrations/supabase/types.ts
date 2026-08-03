@@ -14,7 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      alert_cooldowns: {
+        Row: {
+          last_alert_at: string
+          last_score: number
+          last_stage: string | null
+          symbol: string
+        }
+        Insert: {
+          last_alert_at?: string
+          last_score?: number
+          last_stage?: string | null
+          symbol: string
+        }
+        Update: {
+          last_alert_at?: string
+          last_score?: number
+          last_stage?: string | null
+          symbol?: string
+        }
+        Relationships: []
+      }
+      scan_runs: {
+        Row: {
+          alerts_sent: number
+          created_at: string
+          duration_ms: number
+          error: string | null
+          id: string
+          passed_gates: number
+          scanned: number
+        }
+        Insert: {
+          alerts_sent?: number
+          created_at?: string
+          duration_ms?: number
+          error?: string | null
+          id?: string
+          passed_gates?: number
+          scanned?: number
+        }
+        Update: {
+          alerts_sent?: number
+          created_at?: string
+          duration_ms?: number
+          error?: string | null
+          id?: string
+          passed_gates?: number
+          scanned?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
