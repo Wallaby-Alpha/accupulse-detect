@@ -75,7 +75,15 @@ function Index() {
         </p>
 
         <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Last scan" value={latest ? relative(latest.created_at) : "—"} />
+          <Stat
+            label="Last scan (UTC)"
+            value={
+              latest
+                ? new Date(latest.created_at).toISOString().slice(11, 16)
+                : "—"
+            }
+          />
+
           <Stat label="Scanned" value={latest ? String(latest.scanned) : "—"} />
           <Stat label="Passed gates" value={latest ? String(latest.passed_gates) : "—"} />
           <Stat label="Alerts sent" value={latest ? String(latest.alerts_sent) : "—"} />
