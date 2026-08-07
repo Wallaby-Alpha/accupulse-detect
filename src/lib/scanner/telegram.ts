@@ -12,9 +12,10 @@ const tick = (v: number) => (v >= 0.6 ? "✓" : v >= 0.4 ? "~" : "×");
 
 export function formatAlert(r: ScoreResult): string {
   const price = r.currentPrice;
-  const entryLo = fmtPrice(price * 0.995);
-  const entryHi = fmtPrice(price * 1.005);
-  const stop = fmtPrice(price * 0.92);
+  const limitEntry = price * 0.985;
+  const target = limitEntry * 1.03;
+  const stop = limitEntry * 0.975;
+
 
   const boostLines: string[] = [];
   if (r.boosts.supportBounce > 0)
