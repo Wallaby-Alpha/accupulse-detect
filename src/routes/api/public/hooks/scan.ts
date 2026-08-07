@@ -1,6 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  isStageOne,
+  passesMoverFilter,
+  MAJOR_CAP_EXCLUSIONS,
+  MOVER_LOOKBACK_ALERTS,
+  RUNUP_TRACKING_HOURS,
+} from "@/lib/scanner/alert-filter";
 import { SCANNER_CONFIG } from "@/lib/scanner/config";
+
 import {
   buildUniverse,
   fetchDepth,
@@ -90,6 +98,30 @@ async function runScan() {
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
+  // --- Update rolling run-up tracking for recent alerts (uses tickers we already have) ---
+  const trackingCutoff = new Date(
+    Date.now() - RUNUP_TRACKING_HOURS * 60 * 60_000,
+  ).toISOString();
+  const { data: pending } = await supabaseAdmin
+    .from("alert_history")
+    .select("id,symbol,alert_price,max_runup_pct,alerted_at")
+    .eq("tracking_done", false);
+  for (const row of pending ?? []) {
+    const expired = row.alerted_at < trackingCutoff;
+    const last = Number(tickerBySymbol.get(row.symbol)?.lastPrice ?? 0);
+    const runup =
+      last > 0 && Number(row.alert_price) > 0
+        ? (last / Number(row.alert_price) - 1) * 100
+        : 0;
+    const best = Math.max(Number(row.max_runup_pct), runup);
+    if (best > Number(row.max_runup_pct) || expired) {
+      await supabaseAdmin
+        .from("alert_history")
+        .update({ max_runup_pct: best, tracking_done: expired })
+        .eq("id", row.id);
+    }
+  }
+
   const cooldownCutoff = new Date(
     Date.now() - cfg.THRESHOLDS.RE_ALERT_COOLDOWN_MINUTES * 60_000,
   ).toISOString();
@@ -99,9 +131,27 @@ async function runScan() {
     .gte("last_alert_at", cooldownCutoff);
   const onCooldown = new Set((cooldowns ?? []).map((c) => c.symbol));
 
-  const toAlert = finalResults
-    .filter((r) => r.shouldAlert && !onCooldown.has(r.symbol))
-    .slice(0, cfg.THRESHOLDS.TOP_COINS_PER_SCAN);
+  // Dispatch gate: Stage 1 only, no major caps, no chronic flatliners.
+  const stageOne = finalResults.filter(
+    (r) =>
+      r.shouldAlert &&
+      isStageOne(r.stage) &&
+      !onCooldown.has(r.symbol) &&
+      !MAJOR_CAP_EXCLUSIONS.has(r.symbol),
+  );
+
+  const toAlert: ScoreResult[] = [];
+  for (const r of stageOne) {
+    if (toAlert.length >= cfg.THRESHOLDS.TOP_COINS_PER_SCAN) break;
+    const { data: history } = await supabaseAdmin
+      .from("alert_history")
+      .select("max_runup_pct")
+      .eq("symbol", r.symbol)
+      .order("alerted_at", { ascending: false })
+      .limit(MOVER_LOOKBACK_ALERTS);
+    const runups = (history ?? []).map((h) => Number(h.max_runup_pct));
+    if (passesMoverFilter(runups)) toAlert.push(r);
+  }
 
   let alertsSent = 0;
   for (const r of toAlert) {
@@ -117,10 +167,17 @@ async function runScan() {
         },
         { onConflict: "symbol" },
       );
+      await supabaseAdmin.from("alert_history").insert({
+        symbol: r.symbol,
+        alert_price: r.currentPrice,
+        stage: r.stage,
+        score: r.finalScore,
+      });
     } catch (error) {
       console.error(`Alert failed for ${r.symbol}:`, error);
     }
   }
+
 
   const summary = {
     scanned: universe.length,

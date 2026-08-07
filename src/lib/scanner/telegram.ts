@@ -12,9 +12,10 @@ const tick = (v: number) => (v >= 0.6 ? "✓" : v >= 0.4 ? "~" : "×");
 
 export function formatAlert(r: ScoreResult): string {
   const price = r.currentPrice;
-  const entryLo = fmtPrice(price * 0.995);
-  const entryHi = fmtPrice(price * 1.005);
-  const stop = fmtPrice(price * 0.92);
+  const limitEntry = price * 0.985;
+  const target = limitEntry * 1.03;
+  const stop = limitEntry * 0.975;
+
 
   const boostLines: string[] = [];
   if (r.boosts.supportBounce > 0)
@@ -49,10 +50,12 @@ export function formatAlert(r: ScoreResult): string {
     "💰 BOOSTS & TIMEFRAME:",
     ...boostLines,
     penaltyLine,
-    "🎯 EXECUTION PLAN:",
-    `├─ Suggested Entry Range: $${entryLo} - $${entryHi}`,
-    `├─ Conservative Stop: $${stop} (-8.0%)`,
-    "└─ Target Horizon: 1h to 4h Expansion",
+    "🎯 MECHANICAL EXECUTION PLAN:",
+    `├─ Limit Buy Entry: $${fmtPrice(limitEntry)} (-1.5% from alert price)`,
+    `├─ Take Profit: $${fmtPrice(target)} (+3.0% from fill)`,
+    `├─ Stop Loss: $${fmtPrice(stop)} (-2.5% from fill)`,
+    "└─ Expiration: Cancel limit buy if unfilled after 2 hours",
+
   ].join("\n");
 }
 

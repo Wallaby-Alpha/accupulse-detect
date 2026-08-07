@@ -35,6 +35,39 @@ export type Database = {
         }
         Relationships: []
       }
+      alert_history: {
+        Row: {
+          alert_price: number
+          alerted_at: string
+          id: string
+          max_runup_pct: number
+          score: number | null
+          stage: string | null
+          symbol: string
+          tracking_done: boolean
+        }
+        Insert: {
+          alert_price: number
+          alerted_at?: string
+          id?: string
+          max_runup_pct?: number
+          score?: number | null
+          stage?: string | null
+          symbol: string
+          tracking_done?: boolean
+        }
+        Update: {
+          alert_price?: number
+          alerted_at?: string
+          id?: string
+          max_runup_pct?: number
+          score?: number | null
+          stage?: string | null
+          symbol?: string
+          tracking_done?: boolean
+        }
+        Relationships: []
+      }
       scan_runs: {
         Row: {
           alerts_sent: number
