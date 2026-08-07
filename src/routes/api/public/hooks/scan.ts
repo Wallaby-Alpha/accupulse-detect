@@ -1,6 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  isStageOne,
+  passesMoverFilter,
+  MAJOR_CAP_EXCLUSIONS,
+  MOVER_LOOKBACK_ALERTS,
+  RUNUP_TRACKING_HOURS,
+} from "@/lib/scanner/alert-filter";
 import { SCANNER_CONFIG } from "@/lib/scanner/config";
+
 import {
   buildUniverse,
   fetchDepth,
