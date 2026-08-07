@@ -50,10 +50,12 @@ export function formatAlert(r: ScoreResult): string {
     "💰 BOOSTS & TIMEFRAME:",
     ...boostLines,
     penaltyLine,
-    "🎯 EXECUTION PLAN:",
-    `├─ Suggested Entry Range: $${entryLo} - $${entryHi}`,
-    `├─ Conservative Stop: $${stop} (-8.0%)`,
-    "└─ Target Horizon: 1h to 4h Expansion",
+    "🎯 MECHANICAL EXECUTION PLAN:",
+    `├─ Limit Buy Entry: $${fmtPrice(limitEntry)} (-1.5% from alert price)`,
+    `├─ Take Profit: $${fmtPrice(target)} (+3.0% from fill)`,
+    `├─ Stop Loss: $${fmtPrice(stop)} (-2.5% from fill)`,
+    "└─ Expiration: Cancel limit buy if unfilled after 2 hours",
+
   ].join("\n");
 }
 
