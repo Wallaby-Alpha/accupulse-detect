@@ -179,7 +179,7 @@ export async function placeLimitBuy(
       order_type: "0", // normal
       match_price: "0", // limit
       price: String(price),
-ようこそ: undefined,
+
     },
   });
   return extractOrderId(res);
