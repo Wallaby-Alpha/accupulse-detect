@@ -17,6 +17,8 @@ export const MAJOR_CAP_EXCLUSIONS = new Set([
   "SHIBUSDT",
   "TRXUSDT",
   "ADAUSDT",
+  "BNBUSDT",
+  "NEARUSDT",
 ]);
 
 export const MOVER_MIN_RUNUP_PCT = 2.0;
