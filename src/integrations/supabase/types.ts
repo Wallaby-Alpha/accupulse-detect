@@ -98,6 +98,119 @@ export type Database = {
         }
         Relationships: []
       }
+      trade_events: {
+        Row: {
+          created_at: string
+          detail: string | null
+          event: string
+          id: string
+          symbol: string
+          trade_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          detail?: string | null
+          event: string
+          id?: string
+          symbol: string
+          trade_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          detail?: string | null
+          event?: string
+          id?: string
+          symbol?: string
+          trade_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trade_events_trade_id_fkey"
+            columns: ["trade_id"]
+            isOneToOne: false
+            referencedRelation: "weex_trades"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      weex_trades: {
+        Row: {
+          alert_price: number
+          alerted_at: string
+          close_price: number | null
+          close_reason: string | null
+          closed_at: string | null
+          created_at: string
+          entry_order_id: string | null
+          entry_price: number | null
+          fill_price: number | null
+          filled_at: string | null
+          id: string
+          last_error: string | null
+          placed_at: string | null
+          quantity: number | null
+          realized_pnl: number | null
+          sl_order_id: string | null
+          status: string
+          stop_price: number | null
+          symbol: string
+          target_price: number | null
+          tp_order_id: string | null
+          updated_at: string
+          velocity_pct: number | null
+        }
+        Insert: {
+          alert_price: number
+          alerted_at?: string
+          close_price?: number | null
+          close_reason?: string | null
+          closed_at?: string | null
+          created_at?: string
+          entry_order_id?: string | null
+          entry_price?: number | null
+          fill_price?: number | null
+          filled_at?: string | null
+          id?: string
+          last_error?: string | null
+          placed_at?: string | null
+          quantity?: number | null
+          realized_pnl?: number | null
+          sl_order_id?: string | null
+          status?: string
+          stop_price?: number | null
+          symbol: string
+          target_price?: number | null
+          tp_order_id?: string | null
+          updated_at?: string
+          velocity_pct?: number | null
+        }
+        Update: {
+          alert_price?: number
+          alerted_at?: string
+          close_price?: number | null
+          close_reason?: string | null
+          closed_at?: string | null
+          created_at?: string
+          entry_order_id?: string | null
+          entry_price?: number | null
+          fill_price?: number | null
+          filled_at?: string | null
+          id?: string
+          last_error?: string | null
+          placed_at?: string | null
+          quantity?: number | null
+          realized_pnl?: number | null
+          sl_order_id?: string | null
+          status?: string
+          stop_price?: number | null
+          symbol?: string
+          target_price?: number | null
+          tp_order_id?: string | null
+          updated_at?: string
+          velocity_pct?: number | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
