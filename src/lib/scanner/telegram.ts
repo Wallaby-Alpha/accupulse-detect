@@ -8,54 +8,27 @@ function fmtPrice(value: number): string {
   return value.toPrecision(4);
 }
 
-const tick = (v: number) => (v >= 0.6 ? "✓" : v >= 0.4 ? "~" : "×");
-
 export function formatAlert(r: ScoreResult): string {
   const price = r.currentPrice;
-  const limitEntry = price * 0.985;
-  const target = limitEntry * 1.03;
-  const stop = limitEntry * 0.975;
-
-
-  const boostLines: string[] = [];
-  if (r.boosts.supportBounce > 0)
-    boostLines.push(`├─ Support Bounce: +${r.boosts.supportBounce.toFixed(2)} Confirmed`);
-  if (r.boosts.volumeRamp > 0)
-    boostLines.push(`├─ Volume Ramp Slope: +${r.boosts.volumeRamp.toFixed(2)}`);
-  if (r.boosts.squeezeExpansion > 0)
-    boostLines.push(
-      `├─ Squeeze Expansion Trigger: +${r.boosts.squeezeExpansion.toFixed(2)}`,
-    );
-  boostLines.push(`└─ Timeframe Confluence: 4h ${r.trend4h} | 1d ${r.trend1d}`);
-
-  const penaltyLine = r.penalties.length
-    ? `\n⚠️ PENALTIES: ${r.penalties.join(", ")}\n`
-    : "";
+  const limitEntry = price * 0.975;
+  const target = limitEntry * 1.035;
+  const stop = limitEntry * 0.985;
 
   return [
-    "🎯 PREDICTIVE ACCUMULATION SIGNAL",
+    "🎯 STAGE 1 ACCUMULATION SIGNAL",
     "━━━━━━━━━━━━━━━━━━━━━━━━━",
     `Symbol: #${r.symbol}`,
-    `Price: $${fmtPrice(price)}`,
-    `Score: ${r.finalScore.toFixed(2)} (${r.stage})`,
+    `Alert Price: $${fmtPrice(price)}`,
+    `Score: ${r.finalScore.toFixed(2)} (Stage 1)`,
     "━━━━━━━━━━━━━━━━━━━━━━━━━",
     "",
-    "📈 PREDICTIVE COMPONENTS:",
-    `├─ Relative Strength (vs BTC): ${r.components.relativeStrength.toFixed(2)} ${tick(r.components.relativeStrength)}`,
-    `├─ Volatility Compression: ${r.components.volatilityCompression.toFixed(2)} ${tick(r.components.volatilityCompression)} (BBW/ATR Squeeze)`,
-    `├─ Trend Structure: ${r.components.trendStructure.toFixed(2)} ${tick(r.components.trendStructure)} (EMA20/EMA50)`,
-    `├─ Volume Acceleration: ${r.components.volumeAcceleration.toFixed(2)} ${tick(r.components.volumeAcceleration)}`,
-    `└─ Breakout Readiness: ${r.components.breakoutReadiness.toFixed(2)} ${tick(r.components.breakoutReadiness)} (${r.extras.distanceToHighPct.toFixed(1)}% from 20-period high)`,
-    "",
-    "💰 BOOSTS & TIMEFRAME:",
-    ...boostLines,
-    penaltyLine,
-    "🎯 MECHANICAL EXECUTION PLAN:",
-    `├─ Limit Buy Entry: $${fmtPrice(limitEntry)} (-1.5% from alert price)`,
-    `├─ Take Profit: $${fmtPrice(target)} (+3.0% from fill)`,
-    `├─ Stop Loss: $${fmtPrice(stop)} (-2.5% from fill)`,
-    "└─ Expiration: Cancel limit buy if unfilled after 2 hours",
-
+    "⚡ MECHANICAL EXECUTION PLAN:",
+    "├─ Entry Strategy: Wait 5m for candle close. Skip if 5m drop <= -1.5%",
+    `├─ Limit Buy Entry: $${fmtPrice(limitEntry)} (-2.5% below Alert Price)`,
+    `├─ Take Profit: $${fmtPrice(target)} (+3.5% above fill / +1.0% from Alert)`,
+    `├─ Stop Loss: $${fmtPrice(stop)} (-1.5% below fill / -4.0% from Alert)`,
+    "├─ Time Exit: Market Close position at t = 60m post-entry",
+    "└─ Order Expiration: Cancel limit buy if unfilled after 2 hours",
   ].join("\n");
 }
 
