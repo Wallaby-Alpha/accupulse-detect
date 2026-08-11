@@ -22,7 +22,6 @@ import {
   marketCloseLong,
   placeLimitBuy,
   placePlanOrder,
-  marketCloseLong as closeLong,
   toContractSize,
 } from "./client.server";
 
@@ -323,7 +322,7 @@ async function handleFilled(trade: TradeRow): Promise<void> {
   let closePrice = price ?? Number(trade.fill_price ?? trade.entry_price);
   try {
     const size = await toContractSize(weexSymbol, Number(trade.quantity));
-    await closeLong(weexSymbol, size, `exit-${trade.id.slice(0, 20)}`);
+    await marketCloseLong(weexSymbol, size, `exit-${trade.id.slice(0, 20)}`);
     closePrice = (await getTicker(weexSymbol)) ?? closePrice;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -366,9 +365,6 @@ export async function runTradeEngine(): Promise<{
       await logEvent(row.id, row.symbol, "engine_error", message);
     }
   }
-
-  // Referenced so the unused-import lint stays honest about the alias above.
-  void marketCloseLong;
 
   return { processed: data?.length ?? 0, errors };
 }

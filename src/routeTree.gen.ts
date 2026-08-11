@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiPublicHooksScanRouteImport } from './routes/api/public/hooks/scan'
+import { Route as ApiPublicHooksTradeTickRouteImport } from './routes/api/public/hooks/trade-tick'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,41 @@ const ApiPublicHooksScanRoute = ApiPublicHooksScanRouteImport.update({
   path: '/api/public/hooks/scan',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicHooksTradeTickRoute = ApiPublicHooksTradeTickRouteImport.update({
+  id: '/api/public/hooks/trade-tick',
+  path: '/api/public/hooks/trade-tick',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/hooks/scan'
+  fullPaths: '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/hooks/scan'
-  id: '__root__' | '/' | '/api/public/hooks/scan'
+  to: '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+  id:
+    '__root__' | '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiPublicHooksScanRoute: typeof ApiPublicHooksScanRoute
+  ApiPublicHooksTradeTickRoute: typeof ApiPublicHooksTradeTickRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,23 +76,21 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksScanRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/trade-tick': {
+      id: '/api/public/hooks/trade-tick'
+      path: '/api/public/hooks/trade-tick'
+      fullPath: '/api/public/hooks/trade-tick'
+      preLoaderRoute: typeof ApiPublicHooksTradeTickRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiPublicHooksScanRoute: ApiPublicHooksScanRoute,
+  ApiPublicHooksTradeTickRoute: ApiPublicHooksTradeTickRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
