@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as TradesRouteImport } from './routes/trades'
 import { Route as ApiPublicHooksScanRouteImport } from './routes/api/public/hooks/scan'
 import { Route as ApiPublicHooksTradeTickRouteImport } from './routes/api/public/hooks/trade-tick'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TradesRoute = TradesRouteImport.update({
+  id: '/trades',
+  path: '/trades',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicHooksScanRoute = ApiPublicHooksScanRouteImport.update({
@@ -31,31 +37,41 @@ const ApiPublicHooksTradeTickRoute = ApiPublicHooksTradeTickRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+  fullPaths:
+    '/' | '/trades' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+  to:
+    '/' | '/trades' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
   id:
-    '__root__' | '/' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+    | '__root__'
+    | '/'
+    | '/trades'
+    | '/api/public/hooks/scan'
+    | '/api/public/hooks/trade-tick'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  TradesRoute: typeof TradesRoute
   ApiPublicHooksScanRoute: typeof ApiPublicHooksScanRoute
   ApiPublicHooksTradeTickRoute: typeof ApiPublicHooksTradeTickRoute
 }
@@ -67,6 +83,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/trades': {
+      id: '/trades'
+      path: '/trades'
+      fullPath: '/trades'
+      preLoaderRoute: typeof TradesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/hooks/scan': {
@@ -88,6 +111,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  TradesRoute: TradesRoute,
   ApiPublicHooksScanRoute: ApiPublicHooksScanRoute,
   ApiPublicHooksTradeTickRoute: ApiPublicHooksTradeTickRoute,
 }
