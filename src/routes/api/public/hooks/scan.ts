@@ -153,6 +153,8 @@ async function runScan() {
     if (passesMoverFilter(runups)) toAlert.push(r);
   }
 
+  const { registerSignal } = await import("@/lib/weex/engine.server");
+
   let alertsSent = 0;
   for (const r of toAlert) {
     try {
@@ -173,10 +175,13 @@ async function runScan() {
         stage: r.stage,
         score: r.finalScore,
       });
+      // Hand the signal to the WEEX demo execution engine (5m velocity filter next).
+      await registerSignal(r.symbol, r.currentPrice);
     } catch (error) {
       console.error(`Alert failed for ${r.symbol}:`, error);
     }
   }
+
 
 
   const summary = {
