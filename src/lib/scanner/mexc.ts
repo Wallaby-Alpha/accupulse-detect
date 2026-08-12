@@ -33,14 +33,31 @@ const STABLES = new Set([
   "EURUSDT",
 ]);
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { accept: "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`MEXC ${path} failed [${res.status}]: ${await res.text()}`);
+async function getJson<T>(path: string, retries = 4): Promise<T> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(`${BASE}${path}`, {
+        headers: { accept: "application/json" },
+      });
+      if (res.status === 429) {
+        console.warn(`[MEXC 429] Rate limited on ${path}, retrying in ${1000 * 2 ** attempt}ms...`);
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+      if (!res.ok) {
+        if (attempt === retries - 1) {
+          throw new Error(`MEXC ${path} failed [${res.status}]: ${await res.text()}`);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      return (await res.json()) as T;
+    } catch (err) {
+      if (attempt === retries - 1) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
   }
-  return (await res.json()) as T;
+  throw new Error(`MEXC ${path} failed after ${retries} attempts`);
 }
 
 export async function fetchTickers(): Promise<Ticker[]> {

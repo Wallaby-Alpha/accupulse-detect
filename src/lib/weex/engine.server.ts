@@ -10,6 +10,8 @@
  * only advances rows whose timers have elapsed.
  */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { sendTelegramMessage } from "@/lib/scanner/telegram";
+import { getWeexSupportedSymbols, normalizeSymbol } from "./symbols.server";
 
 import { WEEX_CONFIG, planPrices, toWeexSymbol } from "./config";
 import {
@@ -82,14 +84,45 @@ export async function registerSignal(
   symbol: string,
   alertPrice: number,
 ): Promise<void> {
-  const { data } = await supabaseAdmin
-    .from("weex_trades")
-    .insert({ symbol, alert_price: alertPrice, status: "pending_velocity" })
-    .select("id")
-    .single();
+  const targetSymbol = normalizeSymbol(symbol);
+  const supportedSymbols = await getWeexSupportedSymbols();
+
+  if (!supportedSymbols.has(targetSymbol)) {
+    const detail = `[WEEX ENGINE] Skipped signal for ${symbol}: Token not listed on WEEX Futures.`;
+    await logEvent(null, symbol, "signal_skipped", detail);
+    console.log(detail);
+    return;
+  }
+
+  const tradeId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  let id = tradeId;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("weex_trades")
+      .insert({ id: tradeId, symbol: targetSymbol, alert_price: alertPrice, status: "pending_velocity", alerted_at: now })
+      .select("id")
+      .single();
+    if (data?.id) id = data.id;
+    if (error) console.log(`[Supabase] registerSignal insert: ${error.message}`);
+  } catch (err) {
+    console.log(`[Supabase] registerSignal exception: ${(err as Error).message}`);
+  }
+
+  saveLocalTrade({
+    id,
+    symbol: targetSymbol,
+    alert_price: alertPrice,
+    alerted_at: now,
+    status: "pending_velocity",
+    created_at: now,
+    updated_at: now,
+  });
+
   await logEvent(
-    data?.id ?? null,
-    symbol,
+    id,
+    targetSymbol,
     "signal_received",
     `Alert price ${alertPrice}; velocity check in ${WEEX_CONFIG.VELOCITY_DELAY_MINUTES}m`,
   );

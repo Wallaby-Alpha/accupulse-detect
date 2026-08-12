@@ -40,7 +40,7 @@ function fmt(value: number | null | undefined, digits = 6): string {
   return n >= 1 ? n.toFixed(4) : n.toPrecision(digits);
 }
 
-function ts(value: string | null): string {
+function ts(value: string | null | undefined): string {
   return value ? new Date(value).toISOString().slice(5, 16).replace("T", " ") : "—";
 }
 
@@ -77,11 +77,43 @@ function TradingDesk() {
   );
 
   return (
-    <main className="min-h-screen bg-background px-6 py-14">
+    <main className="min-h-screen bg-background px-6 py-10">
       <div className="mx-auto max-w-5xl">
-        <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
-          WEEX · Contracts · Demo mode
-        </p>
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-5 mb-8">
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <span className="font-mono text-base font-semibold tracking-tight text-foreground">
+              AccuPulse Automated Trading Platform
+            </span>
+          </div>
+          <nav className="flex items-center gap-3">
+            <Link
+              to="/"
+              className="rounded-md border border-border bg-card px-3.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              🔍 Scanner Overview
+            </Link>
+            <Link
+              to="/trades"
+              className="rounded-md bg-emerald-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-emerald-500"
+            >
+              ⚡ WEEX Trading Desk &amp; Performance Dashboard
+            </Link>
+          </nav>
+        </header>
+
+        <div className="flex items-center gap-3">
+          <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            WEEX · Contracts
+          </p>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 font-mono text-[11px] font-medium text-emerald-500 border border-emerald-500/20">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            WEEX V3 SIM PAPER TRADING ACTIVE
+          </span>
+        </div>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight text-foreground">
           Automated Execution Desk
         </h1>

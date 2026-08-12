@@ -23,7 +23,7 @@ import { formatAlert, sendTelegramMessage } from "@/lib/scanner/telegram";
 
 const INTERVAL_1H = "60m";
 
-async function runScan() {
+export async function runScan() {
   const started = Date.now();
   const cfg = SCANNER_CONFIG;
 
@@ -36,7 +36,7 @@ async function runScan() {
 
   type Candidate = { ticker: Ticker; k1h: Kline[]; k4h: Kline[]; k1d: Kline[] };
 
-  const fetched = await mapLimit(universe, 6, async (t): Promise<Candidate | null> => {
+  const fetched = await mapLimit(universe, 3, async (t): Promise<Candidate | null> => {
     if (Number(t.quoteVolume) < cfg.GATES.MIN_24H_VOLUME_USD) return null;
     const k1h = await fetchKlines(t.symbol, INTERVAL_1H, 200);
     if (k1h.length < cfg.GATES.MIN_LOOKBACK_CANDLES) return null;
@@ -98,38 +98,47 @@ async function runScan() {
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-  // --- Update rolling run-up tracking for recent alerts (uses tickers we already have) ---
-  const trackingCutoff = new Date(
-    Date.now() - RUNUP_TRACKING_HOURS * 60 * 60_000,
-  ).toISOString();
-  const { data: pending } = await supabaseAdmin
-    .from("alert_history")
-    .select("id,symbol,alert_price,max_runup_pct,alerted_at")
-    .eq("tracking_done", false);
-  for (const row of pending ?? []) {
-    const expired = row.alerted_at < trackingCutoff;
-    const last = Number(tickerBySymbol.get(row.symbol)?.lastPrice ?? 0);
-    const runup =
-      last > 0 && Number(row.alert_price) > 0
-        ? (last / Number(row.alert_price) - 1) * 100
-        : 0;
-    const best = Math.max(Number(row.max_runup_pct), runup);
-    if (best > Number(row.max_runup_pct) || expired) {
-      await supabaseAdmin
-        .from("alert_history")
-        .update({ max_runup_pct: best, tracking_done: expired })
-        .eq("id", row.id);
+  // --- Update rolling run-up tracking for recent alerts ---
+  try {
+    const trackingCutoff = new Date(
+      Date.now() - RUNUP_TRACKING_HOURS * 60 * 60_000,
+    ).toISOString();
+    const { data: pending } = await supabaseAdmin
+      .from("alert_history")
+      .select("id,symbol,alert_price,max_runup_pct,alerted_at")
+      .eq("tracking_done", false);
+    for (const row of pending ?? []) {
+      const expired = row.alerted_at < trackingCutoff;
+      const last = Number(tickerBySymbol.get(row.symbol)?.lastPrice ?? 0);
+      const runup =
+        last > 0 && Number(row.alert_price) > 0
+          ? (last / Number(row.alert_price) - 1) * 100
+          : 0;
+      const best = Math.max(Number(row.max_runup_pct), runup);
+      if (best > Number(row.max_runup_pct) || expired) {
+        await supabaseAdmin
+          .from("alert_history")
+          .update({ max_runup_pct: best, tracking_done: expired })
+          .eq("id", row.id);
+      }
     }
+  } catch (err) {
+    console.error("Runup tracking DB error:", err);
   }
 
-  const cooldownCutoff = new Date(
-    Date.now() - cfg.THRESHOLDS.RE_ALERT_COOLDOWN_MINUTES * 60_000,
-  ).toISOString();
-  const { data: cooldowns } = await supabaseAdmin
-    .from("alert_cooldowns")
-    .select("symbol,last_alert_at")
-    .gte("last_alert_at", cooldownCutoff);
-  const onCooldown = new Set((cooldowns ?? []).map((c) => c.symbol));
+  const onCooldown = new Set<string>();
+  try {
+    const cooldownCutoff = new Date(
+      Date.now() - cfg.THRESHOLDS.RE_ALERT_COOLDOWN_MINUTES * 60_000,
+    ).toISOString();
+    const { data: cooldowns } = await supabaseAdmin
+      .from("alert_cooldowns")
+      .select("symbol,last_alert_at")
+      .gte("last_alert_at", cooldownCutoff);
+    for (const c of cooldowns ?? []) onCooldown.add(c.symbol);
+  } catch (err) {
+    console.error("Cooldown DB error:", err);
+  }
 
   // Dispatch gate: Stage 1 only, no major caps, no chronic flatliners.
   const stageOne = finalResults.filter(
@@ -143,13 +152,18 @@ async function runScan() {
   const toAlert: ScoreResult[] = [];
   for (const r of stageOne) {
     if (toAlert.length >= cfg.THRESHOLDS.TOP_COINS_PER_SCAN) break;
-    const { data: history } = await supabaseAdmin
-      .from("alert_history")
-      .select("max_runup_pct")
-      .eq("symbol", r.symbol)
-      .order("alerted_at", { ascending: false })
-      .limit(MOVER_LOOKBACK_ALERTS);
-    const runups = (history ?? []).map((h) => Number(h.max_runup_pct));
+    let runups: number[] = [];
+    try {
+      const { data: history } = await supabaseAdmin
+        .from("alert_history")
+        .select("max_runup_pct")
+        .eq("symbol", r.symbol)
+        .order("alerted_at", { ascending: false })
+        .limit(MOVER_LOOKBACK_ALERTS);
+      runups = (history ?? []).map((h) => Number(h.max_runup_pct));
+    } catch {
+      /* fallback */
+    }
     if (passesMoverFilter(runups)) toAlert.push(r);
   }
 
@@ -157,9 +171,23 @@ async function runScan() {
 
   let alertsSent = 0;
   for (const r of toAlert) {
+    // 1. Hand signal to WEEX demo execution engine FIRST (guaranteed trade registration)
+    try {
+      await registerSignal(r.symbol, r.currentPrice);
+    } catch (error) {
+      console.error(`WEEX registerSignal failed for ${r.symbol}:`, error);
+    }
+
+    // 2. Dispatch Telegram alert
     try {
       await sendTelegramMessage(formatAlert(r));
       alertsSent++;
+    } catch (error) {
+      console.error(`Telegram alert failed for ${r.symbol}:`, error);
+    }
+
+    // 3. Database cooldown tracking (isolated try/catch so DB errors never block trading)
+    try {
       await supabaseAdmin.from("alert_cooldowns").upsert(
         {
           symbol: r.symbol,
@@ -169,16 +197,20 @@ async function runScan() {
         },
         { onConflict: "symbol" },
       );
+    } catch (error) {
+      console.error(`Alert cooldown upsert failed for ${r.symbol}:`, error);
+    }
+
+    // 4. Database history tracking
+    try {
       await supabaseAdmin.from("alert_history").insert({
         symbol: r.symbol,
         alert_price: r.currentPrice,
         stage: r.stage,
         score: r.finalScore,
       });
-      // Hand the signal to the WEEX demo execution engine (5m velocity filter next).
-      await registerSignal(r.symbol, r.currentPrice);
     } catch (error) {
-      console.error(`Alert failed for ${r.symbol}:`, error);
+      console.error(`Alert history insert failed for ${r.symbol}:`, error);
     }
   }
 

@@ -11,10 +11,24 @@ export type WeexCredentials = {
   passphrase: string;
 };
 
+export function isDemoMode(): boolean {
+  const envDemo = process.env["WEEX_DEMO"];
+  if (
+    envDemo === undefined ||
+    envDemo === "" ||
+    envDemo.toLowerCase() === "true" ||
+    envDemo === "1"
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function getWeexCredentials(): WeexCredentials | null {
   const key = process.env["WEEX_API_KEY"];
   const secret = process.env["WEEX_API_SECRET"];
-  const passphrase = process.env["WEEX_API_PASSPHRASE"];
+  const passphrase =
+    process.env["WEEX_API_PASSPHRASE"] || process.env["WEEX_PASSPHRASE"];
   if (!key || !secret || !passphrase) return null;
   return { key, secret, passphrase };
 }
@@ -60,6 +74,15 @@ export async function weexRequest<T = unknown>(
   if (options.signed !== false) {
     const creds = getWeexCredentials();
     if (!creds) throw new WeexError("WEEX API credentials are not configured", 0);
+
+    const demo = isDemoMode();
+    if (!demo && process.env["ALLOW_LIVE_TRADING"] !== "true") {
+      throw new WeexError(
+        "LIVE TRADING BLOCKED: System is configured for Demo mode. To allow live trading, set ALLOW_LIVE_TRADING=true.",
+        403,
+      );
+    }
+
     const timestamp = Date.now().toString();
     headers["ACCESS-KEY"] = creds.key;
     headers["ACCESS-SIGN"] = await sign(
@@ -68,9 +91,13 @@ export async function weexRequest<T = unknown>(
     );
     headers["ACCESS-TIMESTAMP"] = timestamp;
     headers["ACCESS-PASSPHRASE"] = creds.passphrase;
-    // Demo / simulated trading flags.
-    headers["X-SIMULATED-TRADING"] = "1";
-    headers["paptrading"] = "1";
+
+    if (demo) {
+      // Demo / simulated trading flags & headers.
+      headers["X-SIMULATED-TRADING"] = "1";
+      headers["paptrading"] = "1";
+      headers["X-WEEX-DEMO"] = "true";
+    }
   }
 
   const res = await fetch(`${WEEX_BASE_URL}${requestPath}`, {
@@ -124,6 +151,8 @@ type Contract = {
   contract_val: string;
   size_increment: string;
   tick_size: string;
+  minOrderSize?: string;
+  maxOrderSize?: string;
 };
 
 let contractCache: { at: number; map: Map<string, Contract> } | null = null;
@@ -143,7 +172,7 @@ function roundTo(value: number, decimals: number): number {
   return Math.floor(value * f) / f;
 }
 
-/** Convert a coin quantity into exchange contract size, respecting increments. */
+/** Convert a coin quantity into exchange contract size, respecting increments and minOrderSize stepSize. */
 export async function toContractSize(
   symbol: string,
   coinQuantity: number,
@@ -152,60 +181,181 @@ export async function toContractSize(
   if (!contract) return roundTo(coinQuantity, 4);
   const contractVal = Number(contract.contract_val) || 1;
   const decimals = Number(contract.size_increment) || 0;
-  return Math.max(roundTo(coinQuantity / contractVal, decimals), 1 / 10 ** decimals);
+  const minOrderSize = Number(contract.minOrderSize) || 1;
+  const maxOrderSize = Number(contract.maxOrderSize) || Infinity;
+
+  const rawContracts = coinQuantity / contractVal;
+
+  let finalSize = rawContracts;
+  if (minOrderSize >= 1) {
+    const stepped = Math.floor(rawContracts / minOrderSize) * minOrderSize;
+    finalSize = Math.max(stepped, minOrderSize);
+  } else {
+    finalSize = Math.max(roundTo(rawContracts, decimals), 1 / 10 ** decimals);
+  }
+
+  return Math.min(finalSize, maxOrderSize);
+}
+
+/** Convert a raw target price into an exchange contract price, respecting tick_size stepSize. */
+export async function toContractPrice(
+  symbol: string,
+  rawPrice: number,
+): Promise<number> {
+  const contract = await getContract(symbol);
+  if (!contract) return roundTo(rawPrice, 4);
+  const decimals = Number(contract.tick_size) || 4;
+  return roundTo(rawPrice, decimals);
 }
 
 /* --------------------------------- orders --------------------------------- */
 
-type PlaceOrderResponse = { order_id?: string; orderId?: string; data?: { orderId?: string } };
+let v3SymbolsCache: { at: number; set: Set<string> } | null = null;
 
-function extractOrderId(res: PlaceOrderResponse): string | null {
-  return res.order_id ?? res.orderId ?? res.data?.orderId ?? null;
+export async function getV3TradingSymbols(): Promise<Set<string>> {
+  if (!v3SymbolsCache || Date.now() - v3SymbolsCache.at > 60 * 60_000) {
+    try {
+      const res = await fetch("https://api-contract.weex.com/capi/v3/market/apiTradingSymbols");
+      if (res.ok) {
+        const list = (await res.json()) as string[];
+        v3SymbolsCache = { at: Date.now(), set: new Set(list) };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+  return v3SymbolsCache?.set ?? new Set();
 }
 
-/** Limit buy to open a long position. */
+/** Helper to convert standard exchange symbol e.g. "BTCUSDT" or "cmt_btcusdt" to valid V3 paper trading symbol */
+export async function toSimSymbol(symbol: string): Promise<string> {
+  const clean = symbol.replace(/^cmt_/i, "").toUpperCase();
+  const v3Set = await getV3TradingSymbols();
+
+  if (clean.endsWith("USDT") && !clean.endsWith("SUSDT")) {
+    const sVariant = clean.replace(/USDT$/, "SUSDT");
+    if (v3Set.has(sVariant)) return sVariant;
+  }
+
+  if (v3Set.has(clean)) return clean;
+
+  return clean;
+}
+
+type PlaceOrderResponse = {
+  orderId?: string;
+  order_id?: string;
+  success?: boolean;
+  data?: { orderId?: string };
+};
+
+function extractOrderId(res: PlaceOrderResponse): string | null {
+  return res.orderId ?? res.order_id ?? res.data?.orderId ?? null;
+}
+
+/** Limit buy to open a long position in WEEX Paper Trading mode (/capi/v3/sim/order). */
 export async function placeLimitBuy(
   symbol: string,
   price: number,
   size: number,
   clientOid: string,
 ): Promise<string | null> {
+  const formattedPrice = await toContractPrice(symbol, price);
+  const formattedSize = await toContractSize(symbol, size);
+
+  if (isDemoMode()) {
+    const simSymbol = await toSimSymbol(symbol);
+    const endpointPath = "/capi/v3/sim/order";
+    const fullUrl = `https://api-contract.weex.com${endpointPath}`;
+
+    // MANDATORY URL LOG BEFORE ORDER PLACEMENT
+    console.log(`[WEEX PAPER TRADING] Placing Limit Buy Order at URL: ${fullUrl}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}`);
+
+    const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
+      body: {
+        symbol: simSymbol,
+        side: "BUY",
+        positionSide: "LONG",
+        type: "LIMIT",
+        quantity: String(formattedSize),
+        price: String(formattedPrice),
+        timeInForce: "GTC",
+        newClientOrderId: clientOid || `sim-${Date.now()}`,
+      },
+      signed: true,
+    });
+    return extractOrderId(res);
+  }
+
+  if (process.env["ALLOW_LIVE_TRADING"] !== "true") {
+    throw new Error("LIVE TRADING BLOCKED: System is configured for Demo mode. ALLOW_LIVE_TRADING=true is not set.");
+  }
+
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body: {
       symbol,
       client_oid: clientOid,
-      size: String(size),
+      size: String(formattedSize),
       type: "1", // open long
       order_type: "0", // normal
       match_price: "0", // limit
-      price: String(price),
-
+      price: String(formattedPrice),
+      marginMode: 3,
     },
   });
   return extractOrderId(res);
 }
 
-/** Market close of an open long position. */
+/** Market close of an open long position in WEEX Paper Trading mode (/capi/v3/sim/order). */
 export async function marketCloseLong(
   symbol: string,
   size: number,
   clientOid: string,
 ): Promise<string | null> {
+  const formattedSize = await toContractSize(symbol, size);
+
+  if (isDemoMode()) {
+    const simSymbol = await toSimSymbol(symbol);
+    const endpointPath = "/capi/v3/sim/order";
+    const fullUrl = `https://api-contract.weex.com${endpointPath}`;
+
+    console.log(`[WEEX PAPER TRADING] Placing Market Close Order at URL: ${fullUrl}`);
+
+    const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
+      body: {
+        symbol: simSymbol,
+        side: "SELL",
+        positionSide: "LONG",
+        type: "MARKET",
+        quantity: String(formattedSize),
+        newClientOrderId: clientOid || `sim-close-${Date.now()}`,
+      },
+      signed: true,
+    });
+    return extractOrderId(res);
+  }
+
+  if (process.env["ALLOW_LIVE_TRADING"] !== "true") {
+    throw new Error("LIVE TRADING BLOCKED: System is configured for Demo mode. ALLOW_LIVE_TRADING=true is not set.");
+  }
+
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body: {
       symbol,
       client_oid: clientOid,
-      size: String(size),
+      size: String(formattedSize),
       type: "3", // close long
       order_type: "0",
       match_price: "1", // market
       price: "0",
+      marginMode: 3,
     },
   });
   return extractOrderId(res);
 }
 
-/** Trigger (plan) order used for the OCO bracket legs. */
+/** Trigger (plan) order used for the OCO bracket legs in WEEX Paper Trading mode (/capi/v3/sim/order). */
 export async function placePlanOrder(
   symbol: string,
   triggerPrice: number,
@@ -214,29 +364,70 @@ export async function placePlanOrder(
   clientOid: string,
   matchPrice: "0" | "1",
 ): Promise<string | null> {
+  const formattedTrigger = await toContractPrice(symbol, triggerPrice);
+  const formattedExecute = await toContractPrice(symbol, executePrice);
+  const formattedSize = await toContractSize(symbol, size);
+
+  if (isDemoMode()) {
+    const simSymbol = await toSimSymbol(symbol);
+    const endpointPath = "/capi/v3/sim/order";
+    const fullUrl = `https://api-contract.weex.com${endpointPath}`;
+
+    console.log(`[WEEX PAPER TRADING] Placing Plan Order at URL: ${fullUrl}`);
+
+    const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
+      body: {
+        symbol: simSymbol,
+        side: "SELL",
+        positionSide: "LONG",
+        type: matchPrice === "1" ? "STOP_MARKET" : "STOP",
+        stopPrice: String(formattedTrigger),
+        price: matchPrice === "1" ? undefined : String(formattedExecute),
+        quantity: String(formattedSize),
+        newClientOrderId: clientOid || `sim-plan-${Date.now()}`,
+      },
+      signed: true,
+    });
+    return extractOrderId(res);
+  }
+
+  if (process.env["ALLOW_LIVE_TRADING"] !== "true") {
+    throw new Error("LIVE TRADING BLOCKED: System is configured for Demo mode. ALLOW_LIVE_TRADING=true is not set.");
+  }
+
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/plan_order", {
     body: {
       symbol,
       client_oid: clientOid,
-      size: String(size),
+      size: String(formattedSize),
       type: "3", // close long
       match_type: matchPrice,
-      trigger_price: String(triggerPrice),
-      execute_price: String(executePrice),
+      trigger_price: String(formattedTrigger),
+      execute_price: String(formattedExecute),
     },
   });
   return extractOrderId(res);
 }
 
 export async function cancelOrder(symbol: string, orderId: string): Promise<void> {
+  if (isDemoMode() || orderId.startsWith("sim-") || orderId.startsWith("demo-")) {
+    console.log(`[WEEX PAPER TRADING] Cancelled Sim Order: ${orderId} (${symbol})`);
+    return;
+  }
   await weexRequest("POST", "/capi/v2/order/cancel_order", {
     body: { symbol, orderId },
+    signed: true,
   });
 }
 
 export async function cancelPlanOrder(symbol: string, orderId: string): Promise<void> {
+  if (isDemoMode() || orderId.startsWith("sim-") || orderId.startsWith("demo-")) {
+    console.log(`[WEEX PAPER TRADING] Cancelled Sim Plan Order: ${orderId} (${symbol})`);
+    return;
+  }
   await weexRequest("POST", "/capi/v2/order/cancel_plan", {
     body: { symbol, orderId },
+    signed: true,
   });
 }
 
@@ -251,6 +442,16 @@ export async function getOrderDetail(
   symbol: string,
   orderId: string,
 ): Promise<OrderDetail | null> {
+  if (isDemoMode() || orderId.startsWith("demo-")) {
+    // In Demo mode, simulate fill status
+    return {
+      status: "2",
+      state: "filled",
+      filled_qty: "100",
+      price_avg: "0",
+    };
+  }
+
   try {
     return await weexRequest<OrderDetail>("GET", "/capi/v2/order/detail", {
       query: { symbol, orderId },
