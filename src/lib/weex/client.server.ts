@@ -3,7 +3,14 @@
  * Auth follows the WEEX capi scheme:
  *   ACCESS-SIGN = base64(hmacSHA256(timestamp + METHOD + requestPath + body, secret))
  */
+import dns from "node:dns";
 import { WEEX_BASE_URL } from "./config";
+
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  /* ignore environment incompatibility */
+}
 
 export type WeexCredentials = {
   key: string;
@@ -53,6 +60,7 @@ export class WeexError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string | number,
   ) {
     super(message);
   }
@@ -109,7 +117,14 @@ export async function weexRequest<T = unknown>(
   const text = await res.text();
   if (!res.ok) {
     console.error(`WEEX ${method} ${requestPath} failed [${res.status}]: ${text}`);
-    throw new WeexError(`WEEX ${res.status}: ${text}`, res.status);
+    let code: string | number | undefined;
+    try {
+      const errJson = JSON.parse(text) as { code?: string | number };
+      code = errJson?.code;
+    } catch {
+      /* ignore */
+    }
+    throw new WeexError(`WEEX ${res.status}: ${text}`, res.status, code);
   }
   let parsed: unknown;
   try {
@@ -125,7 +140,7 @@ export async function weexRequest<T = unknown>(
     String(envelope.code) !== "0" &&
     String(envelope.code) !== "00000"
   ) {
-    throw new WeexError(`WEEX error ${envelope.code}: ${envelope.msg ?? text}`, res.status);
+    throw new WeexError(`WEEX error ${envelope.code}: ${envelope.msg ?? text}`, res.status, envelope.code);
   }
   return parsed as T;
 }

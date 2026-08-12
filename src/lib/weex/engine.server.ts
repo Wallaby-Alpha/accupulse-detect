@@ -11,7 +11,7 @@
  */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { sendTelegramMessage } from "@/lib/scanner/telegram";
-import { getWeexSupportedSymbols, normalizeSymbol } from "./symbols.server";
+import { isSymbolSupportedOnWeex, normalizeSymbol } from "./symbols.server";
 
 import { WEEX_CONFIG, planPrices, toWeexSymbol } from "./config";
 import {
@@ -25,7 +25,9 @@ import {
   placeLimitBuy,
   placePlanOrder,
   toContractSize,
+  WeexError,
 } from "./client.server";
+import { saveLocalTrade } from "./local-store.server";
 
 type TradeRow = {
   id: string;
@@ -85,12 +87,12 @@ export async function registerSignal(
   alertPrice: number,
 ): Promise<void> {
   const targetSymbol = normalizeSymbol(symbol);
-  const supportedSymbols = await getWeexSupportedSymbols();
+  const isSupported = await isSymbolSupportedOnWeex(targetSymbol);
 
-  if (!supportedSymbols.has(targetSymbol)) {
-    const detail = `[WEEX ENGINE] Skipped signal for ${symbol}: Token not listed on WEEX Futures.`;
+  if (!isSupported) {
+    const detail = `Symbol not supported on WEEX API`;
     await logEvent(null, symbol, "signal_skipped", detail);
-    console.log(detail);
+    console.log(`[WEEX ENGINE] Skipped signal for ${symbol}: Symbol not supported on WEEX API`);
     return;
   }
 
@@ -210,9 +212,23 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       `Limit buy ${size} contracts @ ${plan.entry.toPrecision(6)} · SL ${plan.stop.toPrecision(6)} · TP ${plan.target.toPrecision(6)} · risk $${WEEX_CONFIG.FIXED_RISK_USD}`,
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await update(trade.id, { velocity_pct: velocityPct, last_error: message });
-    await logEvent(trade.id, trade.symbol, "order_error", message);
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const codeStr = error instanceof WeexError ? String(error.code ?? "") : "";
+
+    let cleanDetail = rawMsg;
+    if (codeStr === "-1058" || rawMsg.includes("-1058") || rawMsg.includes("1058")) {
+      cleanDetail = "Symbol not supported via WEEX API (-1058)";
+    } else if (codeStr === "-1056" || rawMsg.includes("-1056") || rawMsg.includes("Invalid IP")) {
+      cleanDetail = "Invalid IP address for WEEX API (-1056)";
+    }
+
+    await update(trade.id, {
+      status: "order_error",
+      velocity_pct: velocityPct,
+      last_error: cleanDetail,
+    });
+    await logEvent(trade.id, trade.symbol, "order_error", cleanDetail);
+    console.error(`[WEEX ENGINE] Order error for ${trade.symbol}: ${cleanDetail}`);
   }
 }
 

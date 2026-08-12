@@ -1,5 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import dns from "node:dns";
+
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  /* ignore */
+}
 
 // Load .env variables synchronously before importing server modules
 const envPath = path.resolve(process.cwd(), ".env");
