@@ -20,6 +20,7 @@ import {
   getOrderDetail,
   getTicker,
   getWeexCredentials,
+  isDemoMode,
   isFilled,
   marketCloseLong,
   placeLimitBuy,
@@ -205,10 +206,11 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       placed_at: new Date().toISOString(),
       last_error: null,
     });
+    const isLive = !isDemoMode();
     await logEvent(
       trade.id,
       trade.symbol,
-      "order_placed",
+      isLive ? "live_order_placed" : "order_placed",
       `Limit buy ${size} contracts @ ${plan.entry.toPrecision(6)} · SL ${plan.stop.toPrecision(6)} · TP ${plan.target.toPrecision(6)} · risk $${WEEX_CONFIG.FIXED_RISK_USD}`,
     );
   } catch (error) {
@@ -240,6 +242,7 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
 
   if (isFilled(detail)) {
     const fill = Number(detail?.price_avg) || Number(trade.entry_price);
+    const isLive = !isDemoMode();
     await update(trade.id, {
       status: "filled",
       filled_at: new Date().toISOString(),
@@ -248,7 +251,7 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
     await logEvent(
       trade.id,
       trade.symbol,
-      "order_filled",
+      isLive ? "live_order_filled" : "order_filled",
       `Filled @ ${fill.toPrecision(6)} — ${WEEX_CONFIG.TIME_EXIT_MINUTES}m timer started`,
     );
     await attachBracket({ ...trade, fill_price: fill });

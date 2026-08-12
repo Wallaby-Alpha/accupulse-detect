@@ -21,14 +21,16 @@ export type WeexCredentials = {
 export function isDemoMode(): boolean {
   const envDemo = process.env["WEEX_DEMO"];
   if (
-    envDemo === undefined ||
-    envDemo === "" ||
-    envDemo.toLowerCase() === "true" ||
-    envDemo === "1"
+    envDemo !== undefined &&
+    (envDemo.toLowerCase() === "false" || envDemo === "0")
   ) {
-    return true;
+    return false;
   }
-  return false;
+  const allowLive = process.env["ALLOW_LIVE_TRADING"];
+  if (allowLive === "true" || allowLive === "1") {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -100,7 +102,7 @@ export async function weexRequest<T = unknown>(
   if (options.signed !== false) {
     const creds = getWeexCredentials();
 
-    if (!demo && !process.env["ALLOW_LIVE_TRADING"]) {
+    if (!demo && process.env["ALLOW_LIVE_TRADING"] !== "true" && process.env["ALLOW_LIVE_TRADING"] !== "1") {
       throw new WeexError(
         "LIVE TRADING BLOCKED: System is configured for Demo mode. To allow live trading, set ALLOW_LIVE_TRADING=true.",
         403,
@@ -116,6 +118,7 @@ export async function weexRequest<T = unknown>(
       );
       headers["ACCESS-TIMESTAMP"] = timestamp;
       headers["ACCESS-PASSPHRASE"] = creds.passphrase;
+      headers["locale"] = "en-US";
     }
 
     if (demo) {
