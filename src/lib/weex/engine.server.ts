@@ -126,6 +126,9 @@ export async function registerSignal(
   symbol: string,
   alertPrice: number,
 ): Promise<void> {
+  console.log(`[WEEX ENGINE] 🚨 TRADING IS CURRENTLY DISABLED BY USER KIL SWITCH. Ignoring signal for ${symbol} 🚨`);
+  return;
+
   const targetSymbol = normalizeSymbol(symbol);
   const isSupported = await isSymbolSupportedOnWeex(targetSymbol);
 
