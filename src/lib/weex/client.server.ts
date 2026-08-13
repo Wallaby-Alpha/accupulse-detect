@@ -346,6 +346,7 @@ export async function placeLimitBuy(
           side: "BUY",
           positionSide: "LONG",
           type: "LIMIT",
+          marginType: "ISOLATED",
           quantity: String(formattedSize),
           price: String(formattedPrice),
           timeInForce: "GTC",
@@ -374,7 +375,7 @@ export async function placeLimitBuy(
       order_type: "0", // normal
       match_price: "0", // limit
       price: String(formattedPrice),
-      marginMode: 3,
+      marginMode: 3, // Isolated Margin Mode
     },
   });
   return extractOrderId(res);
@@ -402,6 +403,7 @@ export async function marketCloseLong(
           side: "SELL",
           positionSide: "LONG",
           type: "MARKET",
+          marginType: "ISOLATED",
           quantity: String(formattedSize),
           newClientOrderId: clientOid || `sim-close-${Date.now()}`,
         },
@@ -428,7 +430,7 @@ export async function marketCloseLong(
       order_type: "0",
       match_price: "1", // market
       price: "0",
-      marginMode: 3,
+      marginMode: 3, // Isolated Margin Mode
     },
   });
   return extractOrderId(res);
@@ -461,6 +463,7 @@ export async function placePlanOrder(
           side: "SELL",
           positionSide: "LONG",
           type: matchPrice === "1" ? "STOP_MARKET" : "STOP",
+          marginType: "ISOLATED",
           stopPrice: String(formattedTrigger),
           price: matchPrice === "1" ? undefined : String(formattedExecute),
           quantity: String(formattedSize),
@@ -487,6 +490,7 @@ export async function placePlanOrder(
       size: String(formattedSize),
       type: "3", // close long
       match_type: matchPrice,
+      marginMode: 3, // Isolated Margin Mode
       trigger_price: String(formattedTrigger),
       execute_price: String(formattedExecute),
     },
