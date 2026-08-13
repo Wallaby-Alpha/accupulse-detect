@@ -230,12 +230,12 @@ function getStepFromWeexFormat(format: string | undefined, defaultStep: number):
   if (!format) return defaultStep;
   const num = parseFloat(format);
   if (isNaN(num)) return defaultStep;
-  // If format is an integer between 0 and 10, it's a decimal precision (e.g., "4" -> 0.0001)
-  if (format.indexOf('.') === -1 && num >= 0 && num <= 10) {
+  // If format is an integer between 0 and 8, it's a decimal precision (e.g., "4" -> 0.0001)
+  if (format.indexOf('.') === -1 && num >= 0 && num <= 8) {
     if (num === 0) return 1;
     return parseFloat(Math.pow(10, -num).toFixed(num));
   }
-  // Otherwise, it's a direct step size (e.g., "0.001")
+  // Otherwise, it's a direct step size (e.g., "10" or "0.001")
   return num;
 }
 
@@ -264,16 +264,18 @@ export async function toContractSize(
   limitPrice: number,
 ): Promise<number> {
   const contract = await getContract(symbol);
-  const sizeIncrementStr = contract?.size_increment || "0.0001";
   const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
   const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
+  
+  // If minOrderSize >= 1, the step size is minOrderSize (e.g. 10 or 100), otherwise use size_increment
+  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
 
   if (!limitPrice || limitPrice <= 0) return 0;
 
   // Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
   const rawUnits = targetNotionalUsd / limitPrice;
 
-  let finalSize = floorToStep(rawUnits, sizeIncrementStr);
+  let finalSize = floorToStep(rawUnits, stepStr);
 
   if (finalSize < minOrderSize) {
     finalSize = minOrderSize;
