@@ -324,6 +324,21 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
     return;
   }
 
+  if (detail?.status === "canceled" || detail?.status === "cancelled") {
+    await update(trade.id, {
+      status: "closed",
+      closed_at: new Date().toISOString(),
+      close_reason: "order_cancelled",
+    });
+    await logEvent(
+      trade.id,
+      trade.symbol,
+      "order_cancelled",
+      "Order cancelled on exchange",
+    );
+    return;
+  }
+
   const expiry =
     Date.parse(trade.placed_at ?? trade.alerted_at) +
     WEEX_CONFIG.ORDER_EXPIRY_HOURS * 60 * 60_000;
