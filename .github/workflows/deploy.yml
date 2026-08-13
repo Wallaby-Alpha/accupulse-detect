@@ -17,7 +17,7 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            cd ~/accupulse-detect || cd /root/accupulse-detect
+            cd ~/app || cd /root/app
             git pull
             npm install
             npm run build
