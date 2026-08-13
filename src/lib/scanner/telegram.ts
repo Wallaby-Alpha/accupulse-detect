@@ -33,36 +33,84 @@ export function formatAlert(r: ScoreResult): string {
 }
 
 export async function sendTelegramMessage(text: string): Promise<void> {
-  const lovableKey = process.env["LOVABLE_API_KEY"];
-  const telegramKey = process.env["TELEGRAM_API_KEY"];
-  const chatId = process.env["TELEGRAM_CHAT_ID"];
+  if (!process.env["TELEGRAM_CHAT_ID"] || !process.env["TELEGRAM_BOT_TOKEN"]) {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const envPath = path.resolve(process.cwd(), ".env");
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf-8");
+        for (const line of content.split("\n")) {
+          const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*"?([^"#\r\n]+)"?/);
+          if (match && match[1] && match[2]) {
+            if (!process.env[match[1]]) {
+              process.env[match[1]] = match[2].trim();
+            }
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
-  if (!lovableKey) throw new Error("LOVABLE_API_KEY is not configured");
-  if (!telegramKey) throw new Error("TELEGRAM_API_KEY is not configured");
+  const botToken = process.env["TELEGRAM_BOT_TOKEN"] || process.env["TELEGRAM_API_KEY"];
+  const chatId = process.env["TELEGRAM_CHAT_ID"];
+  const lovableKey = process.env["LOVABLE_API_KEY"];
+
   if (!chatId) throw new Error("TELEGRAM_CHAT_ID is not configured");
 
-  const res = await fetch(`${GATEWAY_URL}/sendMessage`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${lovableKey}`,
-      "X-Connection-Api-Key": telegramKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
+  if (botToken) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`Telegram API failed [${res.status}]: ${body}`);
+      throw new Error(`Telegram API failed [${res.status}]: ${body}`);
+    }
+    const payload = (await res.json()) as { ok?: boolean; description?: string };
+    if (payload.ok === false) {
+      console.error("Telegram API error:", payload.description);
+      throw new Error(`Telegram API error: ${payload.description}`);
+    }
+    return;
+  }
 
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`Telegram gateway failed [${res.status}]: ${body}`);
-    throw new Error(`Telegram send failed [${res.status}]: ${body}`);
+  if (lovableKey) {
+    const res = await fetch(`${GATEWAY_URL}/sendMessage`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lovableKey}`,
+        "X-Connection-Api-Key": process.env["TELEGRAM_API_KEY"] ?? "",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`Telegram gateway failed [${res.status}]: ${body}`);
+      throw new Error(`Telegram gateway failed [${res.status}]: ${body}`);
+    }
+    const payload = (await res.json()) as { ok?: boolean; description?: string };
+    if (payload.ok === false) {
+      console.error("Telegram API error:", payload.description);
+      throw new Error(`Telegram API error: ${payload.description}`);
+    }
+    return;
   }
-  const payload = (await res.json()) as { ok?: boolean; description?: string };
-  if (payload.ok === false) {
-    console.error("Telegram API error:", payload.description);
-    throw new Error(`Telegram API error: ${payload.description}`);
-  }
+
+  throw new Error("Neither TELEGRAM_BOT_TOKEN nor LOVABLE_API_KEY is configured");
 }

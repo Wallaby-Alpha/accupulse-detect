@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TradesRouteImport } from './routes/trades'
 import { Route as ApiPublicHooksScanRouteImport } from './routes/api/public/hooks/scan'
+import { Route as ApiPublicHooksSyncTradesRouteImport } from './routes/api/public/hooks/sync-trades'
 import { Route as ApiPublicHooksTradeTickRouteImport } from './routes/api/public/hooks/trade-tick'
 
 const IndexRoute = IndexRouteImport.update({
@@ -29,6 +30,12 @@ const ApiPublicHooksScanRoute = ApiPublicHooksScanRouteImport.update({
   path: '/api/public/hooks/scan',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicHooksSyncTradesRoute =
+  ApiPublicHooksSyncTradesRouteImport.update({
+    id: '/api/public/hooks/sync-trades',
+    path: '/api/public/hooks/sync-trades',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksTradeTickRoute = ApiPublicHooksTradeTickRouteImport.update({
   id: '/api/public/hooks/trade-tick',
   path: '/api/public/hooks/trade-tick',
@@ -39,12 +46,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRoutesById {
@@ -52,20 +61,30 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
+  '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
   '/api/public/hooks/trade-tick': typeof ApiPublicHooksTradeTickRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/trades' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+    | '/'
+    | '/trades'
+    | '/api/public/hooks/scan'
+    | '/api/public/hooks/sync-trades'
+    | '/api/public/hooks/trade-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/trades' | '/api/public/hooks/scan' | '/api/public/hooks/trade-tick'
+    | '/'
+    | '/trades'
+    | '/api/public/hooks/scan'
+    | '/api/public/hooks/sync-trades'
+    | '/api/public/hooks/trade-tick'
   id:
     | '__root__'
     | '/'
     | '/trades'
     | '/api/public/hooks/scan'
+    | '/api/public/hooks/sync-trades'
     | '/api/public/hooks/trade-tick'
   fileRoutesById: FileRoutesById
 }
@@ -73,6 +92,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   TradesRoute: typeof TradesRoute
   ApiPublicHooksScanRoute: typeof ApiPublicHooksScanRoute
+  ApiPublicHooksSyncTradesRoute: typeof ApiPublicHooksSyncTradesRoute
   ApiPublicHooksTradeTickRoute: typeof ApiPublicHooksTradeTickRoute
 }
 
@@ -99,6 +119,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksScanRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/sync-trades': {
+      id: '/api/public/hooks/sync-trades'
+      path: '/api/public/hooks/sync-trades'
+      fullPath: '/api/public/hooks/sync-trades'
+      preLoaderRoute: typeof ApiPublicHooksSyncTradesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/trade-tick': {
       id: '/api/public/hooks/trade-tick'
       path: '/api/public/hooks/trade-tick'
@@ -113,8 +140,19 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   TradesRoute: TradesRoute,
   ApiPublicHooksScanRoute: ApiPublicHooksScanRoute,
+  ApiPublicHooksSyncTradesRoute: ApiPublicHooksSyncTradesRoute,
   ApiPublicHooksTradeTickRoute: ApiPublicHooksTradeTickRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
