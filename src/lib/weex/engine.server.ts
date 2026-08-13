@@ -64,10 +64,22 @@ async function logEvent(
 }
 
 async function update(id: string, patch: Record<string, unknown>): Promise<void> {
+  const updated_at = new Date().toISOString();
   await supabaseAdmin
     .from("weex_trades")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...patch, updated_at })
     .eq("id", id);
+
+  try {
+    const localTrades = readLocalTrades();
+    const trade = localTrades.find((t) => t.id === id);
+    if (trade) {
+      Object.assign(trade, patch, { updated_at });
+      saveLocalTrade(trade);
+    }
+  } catch {
+    /* ignore local update errors */
+  }
 }
 
 /** Spot price from MEXC — the same source the alert price came from. */
@@ -88,14 +100,7 @@ export async function hasActiveTradeForSymbol(symbol: string): Promise<boolean> 
   const targetSymbol = normalizeSymbol(symbol);
   const activeStatuses = ["pending_velocity", "order_open", "filled"];
 
-  // 1. Check local memory/disk store
-  const localTrades = readLocalTrades();
-  const activeLocal = localTrades.some(
-    (t) => normalizeSymbol(t.symbol) === targetSymbol && activeStatuses.includes(t.status),
-  );
-  if (activeLocal) return true;
-
-  // 2. Check Supabase database
+  // 1. Check Supabase database first (authoritative source)
   try {
     const { data } = await supabaseAdmin
       .from("weex_trades")
@@ -104,10 +109,16 @@ export async function hasActiveTradeForSymbol(symbol: string): Promise<boolean> 
       .in("status", activeStatuses)
       .limit(1);
 
-    return Boolean(data && data.length > 0);
+    if (data && data.length > 0) return true;
   } catch {
-    return false;
+    // If Supabase fails, fall back to local store
+    const localTrades = readLocalTrades();
+    return localTrades.some(
+      (t) => normalizeSymbol(t.symbol) === targetSymbol && activeStatuses.includes(t.status),
+    );
   }
+
+  return false;
 }
 
 /** Called by the scanner right after a Stage 1 Telegram alert is dispatched. */
