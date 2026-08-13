@@ -218,10 +218,17 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     const codeStr = error instanceof WeexError ? String(error.code ?? "") : "";
 
     let cleanDetail = rawMsg;
-    if (codeStr === "-1058" || rawMsg.includes("-1058") || rawMsg.includes("1058")) {
+    if (codeStr === "-1058" || codeStr === "1058" || rawMsg.includes("-1058") || rawMsg.includes("1058")) {
       cleanDetail = "Symbol not supported via WEEX API (-1058)";
-    } else if (codeStr === "-1056" || rawMsg.includes("-1056") || rawMsg.includes("Invalid IP")) {
-      cleanDetail = "Invalid IP address for WEEX API (-1056)";
+    } else if (
+      codeStr === "-1056" ||
+      codeStr === "40018" ||
+      codeStr === "-40018" ||
+      rawMsg.includes("-1056") ||
+      rawMsg.includes("40018") ||
+      rawMsg.includes("Invalid IP")
+    ) {
+      cleanDetail = "Invalid IP address for WEEX API Key (40018 / -1056). Please whitelist your IP on WEEX.";
     }
 
     await update(trade.id, {
