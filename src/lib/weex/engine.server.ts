@@ -454,10 +454,26 @@ async function handleFilled(trade: TradeRow): Promise<void> {
   // Exchange brackets do the closing; we detect which leg triggered.
   if (price !== null) {
     if (price >= Number(trade.target_price)) {
+      if (!trade.tp_order_id) {
+        // Fallback: bracket never attached, market close manually
+        let size = Number(trade.quantity);
+        if (size <= 0 && Number(trade.entry_price) > 0) {
+          size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
+        }
+        await marketCloseLong(weexSymbol, size, `tp-fallback-${trade.id.slice(0, 20)}`);
+      }
       await closeTrade(trade, Number(trade.target_price), "take_profit");
       return;
     }
     if (price <= Number(trade.stop_price)) {
+      if (!trade.sl_order_id) {
+        // Fallback: bracket never attached, market close manually
+        let size = Number(trade.quantity);
+        if (size <= 0 && Number(trade.entry_price) > 0) {
+          size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
+        }
+        await marketCloseLong(weexSymbol, size, `sl-fallback-${trade.id.slice(0, 20)}`);
+      }
       await closeTrade(trade, Number(trade.stop_price), "stop_loss");
       return;
     }

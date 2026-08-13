@@ -226,9 +226,31 @@ export async function getContract(symbol: string): Promise<Contract | null> {
   return contractCache?.map.get(symbol) ?? null;
 }
 
-function roundTo(value: number, decimals: number): number {
-  const f = 10 ** decimals;
-  return Math.floor(value * f) / f;
+function getStepFromWeexFormat(format: string | undefined, defaultStep: number): number {
+  if (!format) return defaultStep;
+  const num = parseFloat(format);
+  if (isNaN(num)) return defaultStep;
+  // If format is an integer between 0 and 10, it's a decimal precision (e.g., "4" -> 0.0001)
+  if (format.indexOf('.') === -1 && num >= 0 && num <= 10) {
+    if (num === 0) return 1;
+    return parseFloat(Math.pow(10, -num).toFixed(num));
+  }
+  // Otherwise, it's a direct step size (e.g., "0.001")
+  return num;
+}
+
+function floorToStep(value: number, stepStr: string): number {
+  const step = getStepFromWeexFormat(stepStr, 0.0001);
+  const decimals = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
+  const numSteps = Math.floor(value / step);
+  return parseFloat((numSteps * step).toFixed(decimals));
+}
+
+function roundToStep(value: number, stepStr: string): number {
+  const step = getStepFromWeexFormat(stepStr, 0.0001);
+  const decimals = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
+  const numSteps = Math.round(value / step);
+  return parseFloat((numSteps * step).toFixed(decimals));
 }
 
 /**
@@ -242,7 +264,7 @@ export async function toContractSize(
   limitPrice: number,
 ): Promise<number> {
   const contract = await getContract(symbol);
-  const decimals = Number(contract?.size_increment) || 0;
+  const sizeIncrementStr = contract?.size_increment || "0.0001";
   const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
   const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
 
@@ -251,19 +273,10 @@ export async function toContractSize(
   // Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
   const rawUnits = targetNotionalUsd / limitPrice;
 
-  let finalSize = rawUnits;
+  let finalSize = floorToStep(rawUnits, sizeIncrementStr);
 
-  if (minOrderSize >= 1) {
-    const step = minOrderSize;
-    finalSize = Math.floor(rawUnits / step) * step;
-    if (finalSize < step) {
-      finalSize = step;
-    }
-  } else {
-    finalSize = roundTo(rawUnits, decimals);
-    if (finalSize < minOrderSize) {
-      finalSize = minOrderSize;
-    }
+  if (finalSize < minOrderSize) {
+    finalSize = minOrderSize;
   }
 
   return Math.min(finalSize, maxOrderSize);
@@ -275,9 +288,9 @@ export async function toContractPrice(
   rawPrice: number,
 ): Promise<number> {
   const contract = await getContract(symbol);
-  if (!contract) return roundTo(rawPrice, 4);
-  const decimals = Number(contract.tick_size) || 4;
-  return roundTo(rawPrice, decimals);
+  if (!contract) return roundToStep(rawPrice, "0.0001");
+  const tickSizeStr = contract.tick_size || "0.0001";
+  return roundToStep(rawPrice, tickSizeStr);
 }
 
 /* --------------------------------- orders --------------------------------- */
@@ -455,18 +468,12 @@ export async function marketCloseLong(
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   const contract = await getContract(formattedSymbol);
-  const decimals = Number(contract?.size_increment) || 0;
+  const sizeIncrementStr = contract?.size_increment || "0.0001";
   const minOrderSize = Number(contract?.minOrderSize) || 1;
 
-  let formattedSize = size;
-  if (minOrderSize >= 1) {
-    const step = minOrderSize;
-    formattedSize = Math.floor(size / step) * step;
-    if (formattedSize < step) formattedSize = step;
-  } else if (decimals > 0) {
-    formattedSize = roundTo(size, decimals);
-  } else {
-    formattedSize = Math.round(size);
+  let formattedSize = floorToStep(size, sizeIncrementStr);
+  if (formattedSize < minOrderSize) {
+    formattedSize = minOrderSize;
   }
 
   if (isDemoMode()) {
@@ -526,9 +533,19 @@ export async function placePlanOrder(
   matchPrice: "0" | "1",
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
+  // Ensure 5x Isolated Leverage prior to bracket placement
+  await setWeexLeverage(formattedSymbol, 5);
+
   const formattedTrigger = await toContractPrice(formattedSymbol, triggerPrice);
   const formattedExecute = await toContractPrice(formattedSymbol, executePrice);
-  const formattedSize = await toContractSize(formattedSymbol, size);
+  
+  const contract = await getContract(formattedSymbol);
+  const sizeIncrementStr = contract?.size_increment || "0.0001";
+  const minOrderSize = Number(contract?.minOrderSize) || 1;
+  let formattedSize = floorToStep(size, sizeIncrementStr);
+  if (formattedSize < minOrderSize) {
+    formattedSize = minOrderSize;
+  }
 
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
