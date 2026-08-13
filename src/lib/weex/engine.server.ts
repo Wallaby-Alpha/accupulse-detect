@@ -224,7 +224,25 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
   }
 
   try {
-    const size = await toContractSize(weexSymbol, plan.quantity);
+    const size = await toContractSize(weexSymbol, plan.quantity, plan.entry);
+
+    if (size <= 0) {
+      await update(trade.id, {
+        status: "discarded",
+        velocity_pct: velocityPct,
+        closed_at: new Date().toISOString(),
+        close_reason: "min_contract_size_exceeded",
+        last_error: "Minimum exchange contract size exceeds $140 Notional position target",
+      });
+      await logEvent(
+        trade.id,
+        trade.symbol,
+        "size_rejected",
+        "Minimum exchange contract size exceeds $140 Notional position target — signal discarded",
+      );
+      return;
+    }
+
     const orderId = await placeLimitBuy(
       weexSymbol,
       plan.entry,
