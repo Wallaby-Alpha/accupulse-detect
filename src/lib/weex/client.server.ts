@@ -168,7 +168,8 @@ export async function weexRequest<T = unknown>(
     typeof envelope === "object" &&
     envelope.code !== undefined &&
     String(envelope.code) !== "0" &&
-    String(envelope.code) !== "00000"
+    String(envelope.code) !== "00000" &&
+    String(envelope.code) !== "200"
   ) {
     throw new WeexError(`WEEX error ${envelope.code}: ${envelope.msg ?? text}`, res.status, envelope.code);
   }
@@ -351,9 +352,19 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
   const formattedSymbol = symbol.startsWith("cmt_") ? symbol : toWeexSymbol(symbol);
 
   const tryEndpoints = [
-    { path: "/capi/v2/order/changeLeverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
-    { path: "/capi/v2/position/changeLeverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
-    { path: "/capi/v2/order/leverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
+    {
+      path: "/capi/v2/account/leverage",
+      body: {
+        symbol: formattedSymbol,
+        longLeverage: String(leverage),
+        shortLeverage: String(leverage),
+        marginMode: 3,
+      },
+    },
+    {
+      path: "/capi/v2/order/changeLeverage",
+      body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 },
+    },
   ];
 
   for (const ep of tryEndpoints) {
@@ -362,15 +373,14 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
         body: ep.body,
         signed: true,
       });
-      console.log(`[WEEX ENGINE] Dynamic ${leverage}x Isolated Leverage set for ${formattedSymbol}`);
+      console.log(`[WEEX ENGINE] Dynamic ${leverage}x Isolated Leverage ENFORCED for ${formattedSymbol}`);
       return true;
-    } catch {
-      /* try next endpoint */
+    } catch (err) {
+      console.warn(`[WEEX ENGINE] Leverage endpoint ${ep.path} error: ${(err as Error).message}`);
     }
   }
 
-  console.log(`[WEEX ENGINE] Leverage setting confirmed for ${formattedSymbol}`);
-  return true;
+  return false;
 }
 
 /** Limit buy to open a long position in WEEX Paper Trading mode (/capi/v3/sim/order). */
