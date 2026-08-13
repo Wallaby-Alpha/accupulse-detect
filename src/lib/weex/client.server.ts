@@ -230,45 +230,39 @@ function roundTo(value: number, decimals: number): number {
   return Math.floor(value * f) / f;
 }
 
-/** Convert a coin quantity into exchange contract size, respecting increments and minOrderSize stepSize. */
+/**
+ * Calculate contract order size for target Notional Position ($140.00 USD).
+ * Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
+ * Respects minOrderSize and size_increment stepSize.
+ */
 export async function toContractSize(
   symbol: string,
-  coinQuantity: number,
-  limitPrice?: number,
+  targetNotionalUsd: number,
+  limitPrice: number,
 ): Promise<number> {
   const contract = await getContract(symbol);
-  if (!contract) return roundTo(coinQuantity, 4);
-  const contractVal = Number(contract.contract_val) || 1;
-  const decimals = Number(contract.size_increment) || 0;
-  const minOrderSize = Number(contract.minOrderSize) || 1;
-  const maxOrderSize = Number(contract.maxOrderSize) || Infinity;
+  const decimals = Number(contract?.size_increment) || 0;
+  const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
+  const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
 
-  const rawContracts = coinQuantity / contractVal;
+  if (!limitPrice || limitPrice <= 0) return 0;
 
-  // If minimum exchange contract size requires more than 1.5x of target $140 notional ($210 USD), reject symbol
-  if (limitPrice && limitPrice > 0) {
-    const minNotional = minOrderSize * contractVal * limitPrice;
-    if (minNotional > 210) {
-      console.warn(`[WEEX SIZING] ${symbol} minimum contract size (${minOrderSize}) requires $${minNotional.toFixed(2)} USD Notional (exceeds $140 target). Rejecting trade.`);
-      return 0;
-    }
-  }
+  // Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
+  const rawUnits = targetNotionalUsd / limitPrice;
 
-  let finalSize = rawContracts;
+  let finalSize = rawUnits;
+
   if (minOrderSize >= 1) {
-    if (rawContracts < minOrderSize) {
-      // If calculated size is less than minimum exchange order size, reject to prevent oversized trades
-      console.warn(`[WEEX SIZING] ${symbol} calculated contracts (${rawContracts.toFixed(4)}) < minOrderSize (${minOrderSize}). Rejecting trade.`);
-      return 0;
+    const step = minOrderSize;
+    finalSize = Math.floor(rawUnits / step) * step;
+    if (finalSize < step) {
+      finalSize = step;
     }
-    const stepped = Math.floor(rawContracts / minOrderSize) * minOrderSize;
-    finalSize = Math.max(stepped, minOrderSize);
   } else {
-    if (rawContracts < minOrderSize) {
-      console.warn(`[WEEX SIZING] ${symbol} calculated contracts (${rawContracts.toFixed(4)}) < minOrderSize (${minOrderSize}). Rejecting trade.`);
-      return 0;
+    finalSize = roundTo(rawUnits, decimals);
+    if (finalSize < minOrderSize) {
+      finalSize = minOrderSize;
     }
-    finalSize = Math.max(roundTo(rawContracts, decimals), 1 / 10 ** decimals);
   }
 
   return Math.min(finalSize, maxOrderSize);
@@ -391,7 +385,7 @@ export async function placeLimitBuy(
   await setWeexLeverage(formattedSymbol, 5);
 
   const formattedPrice = await toContractPrice(formattedSymbol, price);
-  const formattedSize = await toContractSize(formattedSymbol, size);
+  const formattedSize = size;
 
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
