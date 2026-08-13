@@ -241,14 +241,14 @@ function getStepFromWeexFormat(format: string | undefined, defaultStep: number):
 
 function floorToStep(value: number, stepStr: string): number {
   const step = getStepFromWeexFormat(stepStr, 0.0001);
-  const decimals = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
+  const decimals = step.toString().includes('.') ? (step.toString().split('.')[1]?.length ?? 0) : 0;
   const numSteps = Math.floor(value / step);
   return parseFloat((numSteps * step).toFixed(decimals));
 }
 
 function roundToStep(value: number, stepStr: string): number {
   const step = getStepFromWeexFormat(stepStr, 0.0001);
-  const decimals = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
+  const decimals = step.toString().includes('.') ? (step.toString().split('.')[1]?.length ?? 0) : 0;
   const numSteps = Math.round(value / step);
   return parseFloat((numSteps * step).toFixed(decimals));
 }

@@ -145,7 +145,7 @@ export async function registerSignal(
     return;
   }
 
-  const tradeId = crypto.randomUUID();
+  const tradeId = crypto.randomUUID() as `${string}-${string}-${string}-${string}-${string}`;
   const now = new Date().toISOString();
 
   let id = tradeId;
@@ -155,7 +155,7 @@ export async function registerSignal(
       .insert({ id: tradeId, symbol: targetSymbol, alert_price: alertPrice, status: "pending_velocity", alerted_at: now })
       .select("id")
       .single();
-    if (data?.id) id = data.id;
+    if (data?.id) id = data.id as `${string}-${string}-${string}-${string}-${string}`;
     if (error) console.log(`[Supabase] registerSignal insert: ${error.message}`);
   } catch (err) {
     console.log(`[Supabase] registerSignal exception: ${(err as Error).message}`);

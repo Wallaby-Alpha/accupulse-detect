@@ -1,13 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { saveLocalTrade, saveLocalEvent, type LocalTradeRow, type LocalEventRow } from "@/lib/weex/local-store.server";
+import { saveLocalTrade, saveLocalEvent, type TradeRow, type TradeEvent } from "@/lib/weex/local-store.server";
 
 async function handle(req: { request: Request }) {
   try {
     const body = await req.request.json() as {
-      trade?: LocalTradeRow;
-      trades?: LocalTradeRow[];
-      event?: LocalEventRow;
-      events?: LocalEventRow[];
+      trade?: TradeRow;
+      trades?: TradeRow[];
+      event?: TradeEvent;
+      events?: TradeEvent[];
     };
 
     let count = 0;
