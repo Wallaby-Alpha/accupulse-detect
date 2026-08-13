@@ -171,17 +171,24 @@ export async function weexRequest<T = unknown>(
 /* ------------------------------- market data ------------------------------ */
 
 export async function getTicker(symbol: string): Promise<number | null> {
-  try {
-    const data = await weexRequest<{ last?: string }>("GET", "/capi/v2/market/ticker", {
-      query: { symbol },
-      signed: false,
-    });
-    const last = Number(data.last);
-    return Number.isFinite(last) && last > 0 ? last : null;
-  } catch (error) {
-    console.error("WEEX ticker failed:", error);
-    return null;
+  const trySymbols = [
+    symbol,
+    symbol.startsWith("cmt_") ? symbol.replace(/^cmt_/, "").toUpperCase() : `cmt_${symbol.toLowerCase()}`,
+  ];
+
+  for (const s of trySymbols) {
+    try {
+      const data = await weexRequest<{ last?: string }>("GET", "/capi/v2/market/ticker", {
+        query: { symbol: s },
+        signed: false,
+      });
+      const last = Number(data.last);
+      if (Number.isFinite(last) && last > 0) return last;
+    } catch {
+      /* try next symbol format silently */
+    }
   }
+  return null;
 }
 
 type Contract = {
