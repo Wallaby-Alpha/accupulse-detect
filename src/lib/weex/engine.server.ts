@@ -324,11 +324,13 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
   }
 }
 
-/** OCO bracket: take-profit limit + stop-loss trigger, both closing the long. */
+/** OCO bracket: native exchange-side take-profit limit + stop-loss trigger. */
 async function attachBracket(trade: TradeRow): Promise<void> {
   const weexSymbol = toWeexSymbol(trade.symbol);
   try {
     const size = await toContractSize(weexSymbol, Number(trade.quantity));
+    
+    // 1. Native Exchange Take Profit (+3.5% / $4.90 target)
     const tp = await placePlanOrder(
       weexSymbol,
       Number(trade.target_price),
@@ -337,6 +339,8 @@ async function attachBracket(trade: TradeRow): Promise<void> {
       `tp-${trade.id.slice(0, 20)}`,
       "0",
     );
+
+    // 2. Native Exchange Stop Loss (-1.5% / $2.10 risk limit)
     const sl = await placePlanOrder(
       weexSymbol,
       Number(trade.stop_price),
@@ -345,12 +349,13 @@ async function attachBracket(trade: TradeRow): Promise<void> {
       `sl-${trade.id.slice(0, 20)}`,
       "1",
     );
+
     await update(trade.id, { tp_order_id: tp, sl_order_id: sl });
     await logEvent(
       trade.id,
       trade.symbol,
       "bracket_attached",
-      `TP ${Number(trade.target_price).toPrecision(6)} / SL ${Number(trade.stop_price).toPrecision(6)}`,
+      `Native WEEX Exchange Brackets Active: TP +3.5% ($${Number(trade.target_price).toFixed(6)}) / SL -1.5% ($${Number(trade.stop_price).toFixed(6)})`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -364,6 +369,26 @@ async function closeTrade(
   price: number,
   reason: "take_profit" | "stop_loss" | "time_exit",
 ): Promise<void> {
+  const weexSymbol = toWeexSymbol(trade.symbol);
+
+  // Cancel remaining native exchange plan orders if position closed
+  const cancelTargets =
+    reason === "take_profit"
+      ? [trade.sl_order_id]
+      : reason === "stop_loss"
+      ? [trade.tp_order_id]
+      : [trade.tp_order_id, trade.sl_order_id];
+
+  for (const id of cancelTargets) {
+    if (id) {
+      try {
+        await cancelPlanOrder(weexSymbol, id);
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
+  }
+
   const fill = Number(trade.fill_price ?? trade.entry_price);
   const pnl = (price - fill) * Number(trade.quantity);
   await update(trade.id, {
@@ -377,7 +402,7 @@ async function closeTrade(
     trade.id,
     trade.symbol,
     reason,
-    `Closed @ ${price.toPrecision(6)} · PnL $${pnl.toFixed(2)}`,
+    `Closed @ ${price.toFixed(6)} · PnL $${pnl.toFixed(2)} (${reason})`,
   );
 }
 
@@ -402,6 +427,9 @@ async function handleFilled(trade: TradeRow): Promise<void> {
     WEEX_CONFIG.TIME_EXIT_MINUTES * 60_000;
   if (Date.now() < deadline) return;
 
+  console.log(`[WEEX ENGINE] 60-Minute Time Exit triggered for ${trade.symbol}. Cancelling native brackets & market closing...`);
+
+  // 1. Cancel attached native exchange TP/SL orders
   for (const [id, kind] of [
     [trade.tp_order_id, "tp"],
     [trade.sl_order_id, "sl"],
@@ -414,6 +442,7 @@ async function handleFilled(trade: TradeRow): Promise<void> {
     }
   }
 
+  // 2. Transmit market close order to WEEX exchange
   let closePrice = price ?? Number(trade.fill_price ?? trade.entry_price);
   try {
     const size = await toContractSize(weexSymbol, Number(trade.quantity));
