@@ -266,14 +266,15 @@ export async function toContractSize(
   const contract = await getContract(symbol);
   const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
   const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
+  const contractVal = Number(contract?.contract_val) || 1;
   
   // If minOrderSize >= 1, the step size is minOrderSize (e.g. 10 or 100), otherwise use size_increment
   const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
 
   if (!limitPrice || limitPrice <= 0) return 0;
 
-  // Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
-  const rawUnits = targetNotionalUsd / limitPrice;
+  // Formula: Required Contracts = Target Notional ($140) / (Limit Entry Price * Contract Value)
+  const rawUnits = targetNotionalUsd / (limitPrice * contractVal);
 
   let finalSize = floorToStep(rawUnits, stepStr);
 
