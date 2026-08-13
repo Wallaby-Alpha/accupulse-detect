@@ -131,13 +131,15 @@ export async function runScan() {
     const cooldownCutoff = new Date(
       Date.now() - cfg.THRESHOLDS.RE_ALERT_COOLDOWN_MINUTES * 60_000,
     ).toISOString();
-    const { data: cooldowns } = await supabaseAdmin
+    const { data: cooldowns, error: cdErr } = await supabaseAdmin
       .from("alert_cooldowns")
       .select("symbol,last_alert_at")
       .gte("last_alert_at", cooldownCutoff);
-    for (const c of cooldowns ?? []) onCooldown.add(c.symbol);
-  } catch (err) {
-    console.error("Cooldown DB error:", err);
+    if (!cdErr && Array.isArray(cooldowns)) {
+      for (const c of cooldowns) onCooldown.add(c.symbol);
+    }
+  } catch {
+    /* ignore missing table error */
   }
 
   // Dispatch gate: Stage 1 only, no major caps, no chronic flatliners.
@@ -154,13 +156,15 @@ export async function runScan() {
     if (toAlert.length >= cfg.THRESHOLDS.TOP_COINS_PER_SCAN) break;
     let runups: number[] = [];
     try {
-      const { data: history } = await supabaseAdmin
+      const { data: history, error: histErr } = await supabaseAdmin
         .from("alert_history")
         .select("max_runup_pct")
         .eq("symbol", r.symbol)
         .order("alerted_at", { ascending: false })
         .limit(MOVER_LOOKBACK_ALERTS);
-      runups = (history ?? []).map((h) => Number(h.max_runup_pct));
+      if (!histErr && Array.isArray(history)) {
+        runups = history.map((h) => Number(h.max_runup_pct));
+      }
     } catch {
       /* fallback */
     }
@@ -197,8 +201,8 @@ export async function runScan() {
         },
         { onConflict: "symbol" },
       );
-    } catch (error) {
-      console.error(`Alert cooldown upsert failed for ${r.symbol}:`, error);
+    } catch {
+      /* ignore missing table error */
     }
 
     // 4. Database history tracking
@@ -209,8 +213,8 @@ export async function runScan() {
         stage: r.stage,
         score: r.finalScore,
       });
-    } catch (error) {
-      console.error(`Alert history insert failed for ${r.symbol}:`, error);
+    } catch {
+      /* ignore missing table error */
     }
   }
 
