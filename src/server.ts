@@ -1,11 +1,13 @@
 import "./lib/error-capture";
 import { initTelegramHeartbeatScheduler } from "./lib/scanner/heartbeat.server";
+import { initScannerScheduler } from "./lib/scanner/scheduler.server";
 import { initTradeEngineScheduler } from "./lib/weex/scheduler.server";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 
-// Initialize 1-minute WEEX trade engine scheduler & 5-minute Telegram heartbeat scheduler
+// Initialize 3-minute Market Scanner, 1-minute WEEX trade engine, & 5-minute Telegram heartbeat schedulers
+initScannerScheduler();
 initTradeEngineScheduler();
 initTelegramHeartbeatScheduler();
 
