@@ -53,12 +53,29 @@ export function toWeexSymbol(mexcSymbol: string): string {
   return `cmt_${mexcSymbol.toLowerCase()}`;
 }
 
+/**
+ * Position Sizing Math Verification:
+ * RISK_AMOUNT_USD = $2.00 represents the MAXIMUM DOLLAR LOSS on a -1.5% Stop Loss.
+ *
+ * Formula:
+ *   Notional_Position_USD = RISK_AMOUNT_USD / Math.abs(STOP_LOSS_PCT)
+ *   (e.g., 2.0 / 0.015 = $133.3333 USD Notional Value)
+ *
+ *   Contract_Quantity = Notional_Position_USD / Limit_Entry_Price
+ */
 export function planPrices(alertPrice: number) {
-  const riskUsd = WEEX_CONFIG.FIXED_RISK_USD;
+  const riskAmountUsd = WEEX_CONFIG.FIXED_RISK_USD; // 2.00
+  const stopLossPct = Math.abs(WEEX_CONFIG.STOP_OFFSET); // 0.015
+
   const entry = alertPrice * (1 + WEEX_CONFIG.ENTRY_OFFSET);
   const stop = entry * (1 + WEEX_CONFIG.STOP_OFFSET);
   const target = entry * (1 + WEEX_CONFIG.TARGET_OFFSET);
-  const riskPerCoin = Math.abs(entry - stop);
-  const quantity = riskUsd / riskPerCoin;
-  return { entry, stop, target, quantity };
+
+  // 1. Calculate Notional Position Size ($133.33 USD)
+  const notionalPositionUsd = riskAmountUsd / stopLossPct;
+
+  // 2. Calculate Contract Quantity = Notional_Position_USD / Limit_Entry_Price
+  const quantity = notionalPositionUsd / entry;
+
+  return { entry, stop, target, quantity, notionalPositionUsd };
 }
