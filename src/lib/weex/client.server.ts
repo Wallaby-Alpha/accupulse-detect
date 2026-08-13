@@ -470,10 +470,10 @@ export async function marketCloseLong(
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   const contract = await getContract(formattedSymbol);
-  const sizeIncrementStr = contract?.size_increment || "0.0001";
   const minOrderSize = Number(contract?.minOrderSize) || 1;
+  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
 
-  let formattedSize = floorToStep(size, sizeIncrementStr);
+  let formattedSize = floorToStep(size, stepStr);
   if (formattedSize < minOrderSize) {
     formattedSize = minOrderSize;
   }
@@ -483,20 +483,23 @@ export async function marketCloseLong(
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
-    console.log(`[WEEX PAPER TRADING] Placing Market Close Order at URL: ${fullUrl}`);
+    console.log(`[WEEX PAPER TRADING] Executing Market Close at URL: ${fullUrl}`);
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
         body: {
           symbol: simSymbol,
-          side: "SELL",
+          client_oid: clientOid,
+          size: String(formattedSize),
+          type: "3", // close long
+          side: "close_long",
+          holdSide: "long",
           positionSide: "LONG",
-          type: "MARKET",
-          marginType: "ISOLATED",
-          quantity: String(formattedSize),
-          newClientOrderId: clientOid || `sim-close-${Date.now()}`,
+          order_type: "0",
+          match_price: "1", // market
+          price: "0",
+          marginMode: 3, // Isolated Margin Mode
         },
-        signed: true,
       });
       const orderId = extractOrderId(res);
       if (orderId) return orderId;
@@ -542,9 +545,10 @@ export async function placePlanOrder(
   const formattedExecute = await toContractPrice(formattedSymbol, executePrice);
   
   const contract = await getContract(formattedSymbol);
-  const sizeIncrementStr = contract?.size_increment || "0.0001";
   const minOrderSize = Number(contract?.minOrderSize) || 1;
-  let formattedSize = floorToStep(size, sizeIncrementStr);
+  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
+  
+  let formattedSize = floorToStep(size, stepStr);
   if (formattedSize < minOrderSize) {
     formattedSize = minOrderSize;
   }
