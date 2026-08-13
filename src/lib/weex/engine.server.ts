@@ -15,6 +15,7 @@ import { isSymbolSupportedOnWeex, normalizeSymbol } from "./symbols.server";
 
 import { WEEX_CONFIG, planPrices, toWeexSymbol } from "./config";
 import {
+  cancelAllOpenOrdersForSymbol,
   cancelOrder,
   cancelPlanOrder,
   getOrderDetail,
@@ -350,7 +351,10 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
 async function attachBracket(trade: TradeRow): Promise<void> {
   const weexSymbol = toWeexSymbol(trade.symbol);
   try {
-    const size = await toContractSize(weexSymbol, Number(trade.quantity));
+    let size = Number(trade.quantity);
+    if (size <= 0 && Number(trade.entry_price) > 0) {
+      size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
+    }
     
     // 1. Native Exchange Take Profit (+3.5% / $4.90 target)
     const tp = await placePlanOrder(
@@ -451,23 +455,20 @@ async function handleFilled(trade: TradeRow): Promise<void> {
 
   console.log(`[WEEX ENGINE] 60-Minute Time Exit triggered for ${trade.symbol}. Cancelling native brackets & market closing...`);
 
-  // 1. Cancel attached native exchange TP/SL orders
-  for (const [id, kind] of [
-    [trade.tp_order_id, "tp"],
-    [trade.sl_order_id, "sl"],
-  ] as const) {
-    if (!id) continue;
-    try {
-      await cancelPlanOrder(weexSymbol, id);
-    } catch (error) {
-      console.error(`Cancel ${kind} plan order failed:`, error);
-    }
+  // 1. Cancel all attached native exchange limit and plan orders
+  try {
+    await cancelAllOpenOrdersForSymbol(weexSymbol);
+  } catch {
+    /* ignore cancel errors */
   }
 
   // 2. Transmit market close order to WEEX exchange
   let closePrice = price ?? Number(trade.fill_price ?? trade.entry_price);
   try {
-    const size = await toContractSize(weexSymbol, Number(trade.quantity));
+    let size = Number(trade.quantity);
+    if (size <= 0 && Number(trade.entry_price) > 0) {
+      size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
+    }
     await marketCloseLong(weexSymbol, size, `exit-${trade.id.slice(0, 20)}`);
     closePrice = (await getTicker(weexSymbol)) ?? closePrice;
   } catch (error) {

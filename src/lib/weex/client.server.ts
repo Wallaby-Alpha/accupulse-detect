@@ -444,7 +444,20 @@ export async function marketCloseLong(
   clientOid: string,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
-  const formattedSize = await toContractSize(formattedSymbol, size);
+  const contract = await getContract(formattedSymbol);
+  const decimals = Number(contract?.size_increment) || 0;
+  const minOrderSize = Number(contract?.minOrderSize) || 1;
+
+  let formattedSize = size;
+  if (minOrderSize >= 1) {
+    const step = minOrderSize;
+    formattedSize = Math.floor(size / step) * step;
+    if (formattedSize < step) formattedSize = step;
+  } else if (decimals > 0) {
+    formattedSize = roundTo(size, decimals);
+  } else {
+    formattedSize = Math.round(size);
+  }
 
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
@@ -578,6 +591,44 @@ export async function cancelPlanOrder(symbol: string, orderId: string): Promise<
     body: { symbol: formattedSymbol, orderId },
     signed: true,
   });
+}
+
+/** Cancel all resting limit and plan orders for a given symbol. */
+export async function cancelAllOpenOrdersForSymbol(symbol: string): Promise<void> {
+  const formattedSymbol = toWeexSymbol(symbol);
+  try {
+    const orders = await weexRequest<Array<{ order_id?: string; orderId?: string }>>(
+      "GET",
+      `/capi/v2/order/current?symbol=${formattedSymbol}`,
+      { signed: true },
+    );
+    for (const ord of orders || []) {
+      const id = ord.order_id || ord.orderId;
+      if (id) {
+        try { await cancelOrder(formattedSymbol, id); } catch { /* ignore */ }
+        try { await cancelPlanOrder(formattedSymbol, id); } catch { /* ignore */ }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const plans = await weexRequest<Array<{ order_id?: string; orderId?: string }>>(
+      "GET",
+      `/capi/v2/order/currentPlan?symbol=${formattedSymbol}`,
+      { signed: true },
+    );
+    for (const p of plans || []) {
+      const id = p.order_id || p.orderId;
+      if (id) {
+        try { await cancelPlanOrder(formattedSymbol, id); } catch { /* ignore */ }
+        try { await cancelOrder(formattedSymbol, id); } catch { /* ignore */ }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export type OrderDetail = {
