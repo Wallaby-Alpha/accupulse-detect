@@ -4,7 +4,7 @@
  *   ACCESS-SIGN = base64(hmacSHA256(timestamp + METHOD + requestPath + body, secret))
  */
 import dns from "node:dns";
-import { WEEX_BASE_URL } from "./config";
+import { WEEX_BASE_URL, toWeexSymbol } from "./config";
 
 try {
   dns.setDefaultResultOrder("ipv4first");
