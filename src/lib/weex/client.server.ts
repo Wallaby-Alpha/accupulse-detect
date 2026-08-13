@@ -404,6 +404,8 @@ export async function placeLimitBuy(
   price: number,
   size: number,
   clientOid: string,
+  presetTakeProfitPrice?: number,
+  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   // Ensure 5x Isolated Leverage prior to order placement
@@ -411,6 +413,9 @@ export async function placeLimitBuy(
 
   const formattedPrice = await toContractPrice(formattedSymbol, price);
   const formattedSize = size;
+  
+  const formattedTp = presetTakeProfitPrice ? String(await toContractPrice(formattedSymbol, presetTakeProfitPrice)) : undefined;
+  const formattedSl = presetStopLossPrice ? String(await toContractPrice(formattedSymbol, presetStopLossPrice)) : undefined;
 
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
@@ -432,6 +437,8 @@ export async function placeLimitBuy(
           price: String(formattedPrice),
           timeInForce: "GTC",
           newClientOrderId: clientOid || `sim-${Date.now()}`,
+          presetTakeProfitPrice: formattedTp,
+          presetStopLossPrice: formattedSl,
         },
         signed: true,
       });
@@ -456,6 +463,8 @@ export async function placeLimitBuy(
       match_price: "0", // limit
       price: String(formattedPrice),
       marginMode: 3, // Isolated Margin Mode
+      presetTakeProfitPrice: formattedTp,
+      presetStopLossPrice: formattedSl,
     },
     signed: true,
   });

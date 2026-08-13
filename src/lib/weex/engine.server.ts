@@ -126,9 +126,6 @@ export async function registerSignal(
   symbol: string,
   alertPrice: number,
 ): Promise<void> {
-  console.log(`[WEEX ENGINE] 🚨 TRADING IS CURRENTLY DISABLED BY USER KIL SWITCH. Ignoring signal for ${symbol} 🚨`);
-  return;
-
   const targetSymbol = normalizeSymbol(symbol);
   const isSupported = await isSymbolSupportedOnWeex(targetSymbol);
 
@@ -267,6 +264,8 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       plan.entry,
       size,
       `entry-${trade.id.slice(0, 20)}`,
+      plan.target,
+      plan.stop
     );
     await update(trade.id, {
       status: "order_open",
@@ -274,7 +273,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       entry_price: plan.entry,
       stop_price: plan.stop,
       target_price: plan.target,
-      quantity: plan.quantity,
+      quantity: size,
       entry_order_id: orderId,
       placed_at: new Date().toISOString(),
       last_error: null,
@@ -334,7 +333,6 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
       isLive ? "live_order_filled" : "order_filled",
       `Filled @ ${fill.toPrecision(6)} — ${WEEX_CONFIG.TIME_EXIT_MINUTES}m timer started`,
     );
-    await attachBracket({ ...trade, fill_price: fill });
     return;
   }
 
@@ -376,48 +374,6 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
   }
 }
 
-/** OCO bracket: native exchange-side take-profit limit + stop-loss trigger. */
-async function attachBracket(trade: TradeRow): Promise<void> {
-  const weexSymbol = toWeexSymbol(trade.symbol);
-  try {
-    let size = Number(trade.quantity);
-    if (size <= 0 && Number(trade.entry_price) > 0) {
-      size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
-    }
-    
-    // 1. Native Exchange Take Profit (+3.5% / $4.90 target)
-    const tp = await placePlanOrder(
-      weexSymbol,
-      Number(trade.target_price),
-      Number(trade.target_price),
-      size,
-      `tp-${trade.id.slice(0, 20)}`,
-      "0",
-    );
-
-    // 2. Native Exchange Stop Loss (-1.5% / $2.10 risk limit)
-    const sl = await placePlanOrder(
-      weexSymbol,
-      Number(trade.stop_price),
-      Number(trade.stop_price),
-      size,
-      `sl-${trade.id.slice(0, 20)}`,
-      "1",
-    );
-
-    await update(trade.id, { tp_order_id: tp, sl_order_id: sl });
-    await logEvent(
-      trade.id,
-      trade.symbol,
-      "bracket_attached",
-      `Native WEEX Exchange Brackets Active: TP +3.5% ($${Number(trade.target_price).toFixed(6)}) / SL -1.5% ($${Number(trade.stop_price).toFixed(6)})`,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await update(trade.id, { last_error: `Bracket failed: ${message}` });
-    await logEvent(trade.id, trade.symbol, "bracket_error", message);
-  }
-}
 
 async function closeTrade(
   trade: TradeRow,
