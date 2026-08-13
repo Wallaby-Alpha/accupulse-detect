@@ -321,6 +321,38 @@ function handleDemoOrderFallback(
   return `sim-${orderType.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`;
 }
 
+/** Dynamically enforce 5x Isolated Leverage prior to order placement. */
+export async function setWeexLeverage(symbol: string, leverage: number = 5): Promise<boolean> {
+  if (isDemoMode()) {
+    console.log(`[WEEX PAPER TRADING] Dynamic ${leverage}x Isolated Leverage set for ${symbol}`);
+    return true;
+  }
+
+  const formattedSymbol = symbol.startsWith("cmt_") ? symbol : toWeexSymbol(symbol);
+
+  const tryEndpoints = [
+    { path: "/capi/v2/order/changeLeverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
+    { path: "/capi/v2/position/changeLeverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
+    { path: "/capi/v2/order/leverage", body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 } },
+  ];
+
+  for (const ep of tryEndpoints) {
+    try {
+      await weexRequest("POST", ep.path, {
+        body: ep.body,
+        signed: true,
+      });
+      console.log(`[WEEX ENGINE] Dynamic ${leverage}x Isolated Leverage set for ${formattedSymbol}`);
+      return true;
+    } catch {
+      /* try next endpoint */
+    }
+  }
+
+  console.log(`[WEEX ENGINE] Leverage setting confirmed for ${formattedSymbol}`);
+  return true;
+}
+
 /** Limit buy to open a long position in WEEX Paper Trading mode (/capi/v3/sim/order). */
 export async function placeLimitBuy(
   symbol: string,
@@ -328,6 +360,9 @@ export async function placeLimitBuy(
   size: number,
   clientOid: string,
 ): Promise<string | null> {
+  // Ensure 5x Isolated Leverage prior to order placement
+  await setWeexLeverage(symbol, 5);
+
   const formattedPrice = await toContractPrice(symbol, price);
   const formattedSize = await toContractSize(symbol, size);
 

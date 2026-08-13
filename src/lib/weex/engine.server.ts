@@ -28,7 +28,7 @@ import {
   toContractSize,
   WeexError,
 } from "./client.server";
-import { saveLocalTrade } from "./local-store.server";
+import { readLocalTrades, saveLocalTrade } from "./local-store.server";
 
 type TradeRow = {
   id: string;
@@ -82,6 +82,33 @@ async function mexcPrice(symbol: string): Promise<number | null> {
   }
 }
 
+/** Checks if an active position or pending order already exists for the target symbol. */
+export async function hasActiveTradeForSymbol(symbol: string): Promise<boolean> {
+  const targetSymbol = normalizeSymbol(symbol);
+  const activeStatuses = ["pending_velocity", "order_open", "filled"];
+
+  // 1. Check local memory/disk store
+  const localTrades = readLocalTrades();
+  const activeLocal = localTrades.some(
+    (t) => normalizeSymbol(t.symbol) === targetSymbol && activeStatuses.includes(t.status),
+  );
+  if (activeLocal) return true;
+
+  // 2. Check Supabase database
+  try {
+    const { data } = await supabaseAdmin
+      .from("weex_trades")
+      .select("id")
+      .eq("symbol", targetSymbol)
+      .in("status", activeStatuses)
+      .limit(1);
+
+    return Boolean(data && data.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 /** Called by the scanner right after a Stage 1 Telegram alert is dispatched. */
 export async function registerSignal(
   symbol: string,
@@ -94,6 +121,15 @@ export async function registerSignal(
     const detail = `Symbol not supported on WEEX API`;
     await logEvent(null, symbol, "signal_skipped", detail);
     console.log(`[WEEX ENGINE] Skipped signal for ${symbol}: Symbol not supported on WEEX API`);
+    return;
+  }
+
+  // Single Active Trade Per Symbol Guard
+  const activeExists = await hasActiveTradeForSymbol(targetSymbol);
+  if (activeExists) {
+    const detail = `Active position or pending order already exists for ${targetSymbol}`;
+    await logEvent(null, targetSymbol, "signal_skipped", detail);
+    console.log(`[WEEX ENGINE] Skipped signal for ${targetSymbol}: ${detail}`);
     return;
   }
 

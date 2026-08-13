@@ -12,9 +12,13 @@ function parseEnvNum(key: string, fallback: number): number {
 }
 
 export const WEEX_CONFIG = {
-  /** Fixed dollar risk per trade ($2.00): hitting the stop loses this amount. */
+  /** Fixed Notional Position Value ($140.00 USD). */
+  get NOTIONAL_POSITION_USD(): number {
+    return parseEnvNum("NOTIONAL_POSITION_USD", parseEnvNum("NOTIONAL_USD", 140.0));
+  },
+  /** Legacy risk usd getter for backward compatibility. */
   get FIXED_RISK_USD(): number {
-    return parseEnvNum("FIXED_RISK_USD", parseEnvNum("RISK_AMOUNT_USD", 2.0));
+    return parseEnvNum("FIXED_RISK_USD", parseEnvNum("RISK_AMOUNT_USD", 2.1));
   },
   /** Velocity filter window after the alert. */
   get VELOCITY_DELAY_MINUTES(): number {
@@ -44,7 +48,7 @@ export const WEEX_CONFIG = {
   get TIME_EXIT_MINUTES(): number {
     return parseEnvNum("TIME_EXIT_MINUTES", 60);
   },
-  /** Leverage used for position. */
+  /** Dynamic leverage used for position (5x). */
   LEVERAGE: 5,
 };
 
@@ -54,27 +58,20 @@ export function toWeexSymbol(mexcSymbol: string): string {
 }
 
 /**
- * Position Sizing Math Verification:
- * RISK_AMOUNT_USD = $2.00 represents the MAXIMUM DOLLAR LOSS on a -1.5% Stop Loss.
+ * Fixed $140.00 Notional Position Sizing:
+ * Target Notional Position Value = $140.00 USD
+ * Contract Quantity = $140.00 / Limit Entry Price
  *
- * Formula:
- *   Notional_Position_USD = RISK_AMOUNT_USD / Math.abs(STOP_LOSS_PCT)
- *   (e.g., 2.0 / 0.015 = $133.3333 USD Notional Value)
- *
- *   Contract_Quantity = Notional_Position_USD / Limit_Entry_Price
+ * Risk at -1.5% Stop Loss = $140.00 * 0.015 = $2.10 USD
+ * Gain at +3.5% Take Profit = $140.00 * 0.035 = $4.90 USD
  */
 export function planPrices(alertPrice: number) {
-  const riskAmountUsd = WEEX_CONFIG.FIXED_RISK_USD; // 2.00
-  const stopLossPct = Math.abs(WEEX_CONFIG.STOP_OFFSET); // 0.015
-
+  const notionalPositionUsd = WEEX_CONFIG.NOTIONAL_POSITION_USD; // $140.00 USD
   const entry = alertPrice * (1 + WEEX_CONFIG.ENTRY_OFFSET);
   const stop = entry * (1 + WEEX_CONFIG.STOP_OFFSET);
   const target = entry * (1 + WEEX_CONFIG.TARGET_OFFSET);
 
-  // 1. Calculate Notional Position Size ($133.33 USD)
-  const notionalPositionUsd = riskAmountUsd / stopLossPct;
-
-  // 2. Calculate Contract Quantity = Notional_Position_USD / Limit_Entry_Price
+  // Contract Quantity = $140.00 / Limit Entry Price
   const quantity = notionalPositionUsd / entry;
 
   return { entry, stop, target, quantity, notionalPositionUsd };
