@@ -54,7 +54,8 @@ export const WEEX_CONFIG = {
 
 /** MEXC spot symbol (BTCUSDT) -> WEEX contract symbol (cmt_btcusdt). */
 export function toWeexSymbol(mexcSymbol: string): string {
-  return `cmt_${mexcSymbol.toLowerCase()}`;
+  const clean = String(mexcSymbol || "").trim().toLowerCase();
+  return clean.startsWith("cmt_") ? clean : `cmt_${clean}`;
 }
 
 /**
