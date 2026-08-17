@@ -273,7 +273,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     trade.id,
     trade.symbol,
     "velocity_pass",
-    `5m move ${velocityPct.toFixed(2)}% — knife check passed (> -1.5%). Executing Split-Entry pipeline ($70 Market + $70 Limit Pullback).`,
+    `5m move ${velocityPct.toFixed(2)}% — knife check passed (> -1.5%). Executing 2 Independent Tranches ($70 Market + $70 Limit Pullback with Native Preset TP/SL).`,
   );
 
   if (!getWeexCredentials()) {
@@ -293,7 +293,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     const tickStr = contract?.tick_size || "0.0001";
     const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
 
-    // 2A. Tranche 1 (Immediate Market Fill - $70 Notional)
+    // --- TRADE 1: TRANCHE 1 (Immediate Market Buy - $70 Notional) ---
     let qty1 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / price_5m, stepStr);
     if (qty1 > maxOrderSize) {
       qty1 = floorToStep(maxOrderSize, stepStr);
@@ -316,138 +316,95 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       return;
     }
 
+    const tp1 = price_5m * (1 + WEEX_CONFIG.TP2_OFFSET); // +3.5%
+    const sl1 = price_5m * (1 + WEEX_CONFIG.STOP_OFFSET); // -1.5%
+
     const mktOrderId = await marketBuyLong(
       weexSymbol,
       qty1,
       `t1-${trade.id.slice(0, 18)}`,
+      tp1,
+      sl1,
     );
 
     const fillPrice1 = (await getTicker(weexSymbol)) ?? price_5m;
-    const t1SlPrice = fillPrice1 * (1 + WEEX_CONFIG.STOP_OFFSET);
-    const t1Tp1Price = fillPrice1 * (1 + WEEX_CONFIG.TP1_OFFSET);
-    const t1Tp2Price = fillPrice1 * (1 + WEEX_CONFIG.TP2_OFFSET);
-
-    const { sizeTP1: sizeTP1_t1, sizeTP2: sizeTP2_t1 } = splitQuantity5050(qty1, stepStr);
-
-    let t1Tp1Id: string | null = null;
-    let t1Tp2Id: string | null = null;
-    let t1SlId: string | null = null;
-
-    try {
-      if (sizeTP1_t1 > 0) {
-        t1Tp1Id = await placePlanOrder(
-          weexSymbol,
-          t1Tp1Price,
-          t1Tp1Price,
-          sizeTP1_t1,
-          `tp1-t1-${trade.id.slice(0, 14)}`,
-          "0",
-        );
-      }
-    } catch (err) {
-      console.warn(`Tranche 1 TP1 plan order error for ${trade.symbol}:`, (err as Error).message);
-    }
-
-    try {
-      if (sizeTP2_t1 > 0) {
-        t1Tp2Id = await placePlanOrder(
-          weexSymbol,
-          t1Tp2Price,
-          t1Tp2Price,
-          sizeTP2_t1,
-          `tp2-t1-${trade.id.slice(0, 14)}`,
-          "0",
-        );
-      }
-    } catch (err) {
-      console.warn(`Tranche 1 TP2 plan order error for ${trade.symbol}:`, (err as Error).message);
-    }
-
-    try {
-      if (qty1 > 0) {
-        t1SlId = await placePlanOrder(
-          weexSymbol,
-          t1SlPrice,
-          t1SlPrice,
-          qty1,
-          `sl-t1-${trade.id.slice(0, 14)}`,
-          "1",
-        );
-      }
-    } catch (err) {
-      console.warn(`Tranche 1 SL plan order error for ${trade.symbol}:`, (err as Error).message);
-    }
-
-    // 2B. Tranche 2 (Pullback Limit Order - $70 Notional @ -1.0% Pullback)
-    const limitPrice2 = roundToStep(price_5m * (1 + WEEX_CONFIG.PULLBACK_OFFSET), tickStr);
-    let qty2 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / limitPrice2, stepStr);
-    if (qty2 > maxOrderSize) {
-      qty2 = floorToStep(maxOrderSize, stepStr);
-    }
-
-    let limitOrderId2: string | null = null;
-    if (qty2 > 0) {
-      try {
-        limitOrderId2 = await placeLimitBuy(
-          weexSymbol,
-          limitPrice2,
-          qty2,
-          `t2-${trade.id.slice(0, 18)}`,
-        );
-      } catch (err) {
-        console.warn(`Tranche 2 limit order submit error for ${trade.symbol}:`, (err as Error).message);
-      }
-    }
-
     const now = new Date().toISOString();
-    const totalQty = qty1 + qty2;
 
     await update(trade.id, {
       status: "filled",
       velocity_pct: velocityPct,
       entry_price: fillPrice1,
       fill_price: fillPrice1,
-      stop_price: t1SlPrice,
-      target_price: t1Tp2Price,
-      tp1_price: t1Tp1Price,
-      tp2_price: t1Tp2Price,
-      quantity: totalQty,
-      t1_quantity: qty1,
-      t2_quantity: qty2,
-      t1_fill_price: fillPrice1,
-      t2_limit_price: limitPrice2,
-      t2_order_id: limitOrderId2,
-      t2_placed_at: now,
-      t2_filled: false,
-      t2_expired: false,
+      stop_price: sl1,
+      target_price: tp1,
+      quantity: qty1,
       entry_order_id: mktOrderId,
-      tp1_order_id: t1Tp1Id,
-      tp2_order_id: t1Tp2Id,
-      sl_order_id: t1SlId,
-      tp_order_id: [t1Tp1Id, t1Tp2Id].filter(Boolean).join(","),
       placed_at: now,
       filled_at: now,
-      tp1_filled: false,
-      sl_moved_to_be: false,
-      high_water_price: fillPrice1,
-      remaining_quantity: totalQty,
+      remaining_quantity: qty1,
       last_error: null,
     });
 
-    const isLive = !isDemoMode();
     await logEvent(
       trade.id,
       trade.symbol,
-      isLive ? "tranche1_filled" : "tranche1_filled",
-      `Tranche 1 Market Buy filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)} ($70 USD notional). Attached TP1 (+2.0%), TP2 (+3.5%), SL (-1.5%).`,
+      "tranche1_filled",
+      `Trade 1 ($70 Market Buy) filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)}. Native WEEX Preset TP (+3.5%) @ ${tp1.toPrecision(6)} & Preset SL (-1.5%) @ ${sl1.toPrecision(6)} attached to payload.`,
     );
 
-    if (limitOrderId2) {
+    // --- TRADE 2: TRANCHE 2 (Pullback Limit Buy - $70 Notional @ -1.0% Pullback) ---
+    const limitPrice2 = roundToStep(price_5m * (1 + WEEX_CONFIG.PULLBACK_OFFSET), tickStr);
+    let qty2 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / limitPrice2, stepStr);
+    if (qty2 > maxOrderSize) {
+      qty2 = floorToStep(maxOrderSize, stepStr);
+    }
+
+    if (qty2 > 0) {
+      const tp2 = limitPrice2 * (1 + WEEX_CONFIG.TP2_OFFSET); // +3.5%
+      const sl2 = limitPrice2 * (1 + WEEX_CONFIG.STOP_OFFSET); // -1.5%
+
+      const tradeId2 = crypto.randomUUID() as `${string}-${string}-${string}-${string}-${string}`;
+
+      try {
+        await supabaseAdmin.from("weex_trades").insert({
+          id: tradeId2,
+          symbol: trade.symbol,
+          alert_price: trade.alert_price,
+          status: "pending_velocity",
+          alerted_at: now,
+          created_at: now,
+        });
+      } catch {}
+
+      const limitOrderId2 = await placeLimitBuy(
+        weexSymbol,
+        limitPrice2,
+        qty2,
+        `t2-${tradeId2.slice(0, 18)}`,
+        tp2,
+        sl2,
+      );
+
+      await update(tradeId2, {
+        symbol: trade.symbol,
+        alert_price: trade.alert_price,
+        status: "order_open",
+        velocity_pct: velocityPct,
+        entry_price: limitPrice2,
+        stop_price: sl2,
+        target_price: tp2,
+        quantity: qty2,
+        entry_order_id: limitOrderId2,
+        placed_at: now,
+        remaining_quantity: qty2,
+        last_error: null,
+      });
+
       await logEvent(
-        trade.id,
+        tradeId2,
         trade.symbol,
         "tranche2_submitted",
-        `Tranche 2 Pullback Limit Buy placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)} (-1.0% pullback, $70 USD notional). 15m expiration timer started.`,
+        `Trade 2 ($70 Limit Buy @ -1.0% pullback) placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)}. Native WEEX Preset TP (+3.5%) @ ${tp2.toPrecision(6)} & Preset SL (-1.5%) @ ${sl2.toPrecision(6)} attached to payload. 15m expiry timer active.`,
       );
     }
 
@@ -489,79 +446,18 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
     const fill = Number(detail?.price_avg) || Number(trade.entry_price);
     const isLive = !isDemoMode();
 
-    const contract = await getContract(weexSymbol);
-    const stepStr = getContractStepSize(contract);
-    const totalQty = Number(trade.quantity ?? 0);
-    const { sizeTP1, sizeTP2 } = splitQuantity5050(totalQty, stepStr);
-
-    const tp1Price = fill * (1 + WEEX_CONFIG.TP1_OFFSET);
-    const tp2Price = fill * (1 + WEEX_CONFIG.TP2_OFFSET);
-    const initialSlPrice = fill * (1 + WEEX_CONFIG.STOP_OFFSET);
-
-    let tp1OrderId: string | null = null;
-    let tp2OrderId: string | null = null;
-    let slOrderId: string | null = null;
-
-    try {
-      if (sizeTP1 > 0) {
-        tp1OrderId = await placePlanOrder(
-          weexSymbol,
-          tp1Price,
-          tp1Price,
-          sizeTP1,
-          `tp1-${trade.id.slice(0, 18)}`,
-          "0",
-        );
-      }
-      if (sizeTP2 > 0) {
-        tp2OrderId = await placePlanOrder(
-          weexSymbol,
-          tp2Price,
-          tp2Price,
-          sizeTP2,
-          `tp2-${trade.id.slice(0, 18)}`,
-          "0",
-        );
-      }
-      if (totalQty > 0) {
-        slOrderId = await placePlanOrder(
-          weexSymbol,
-          initialSlPrice,
-          initialSlPrice,
-          totalQty,
-          `sl-${trade.id.slice(0, 18)}`,
-          "1",
-        );
-      }
-    } catch (err) {
-      console.warn(`Attach plan orders error for ${trade.symbol}:`, (err as Error).message);
-    }
-
-    const combinedTpId = [tp1OrderId, tp2OrderId].filter(Boolean).join(",") || trade.tp_order_id;
-
     await update(trade.id, {
       status: "filled",
       filled_at: new Date().toISOString(),
       fill_price: fill,
-      stop_price: initialSlPrice,
-      target_price: tp2Price,
-      tp1_price: tp1Price,
-      tp2_price: tp2Price,
-      tp1_order_id: tp1OrderId,
-      tp2_order_id: tp2OrderId,
-      tp_order_id: combinedTpId,
-      sl_order_id: slOrderId || trade.sl_order_id,
-      tp1_filled: false,
-      sl_moved_to_be: false,
-      high_water_price: fill,
-      remaining_quantity: totalQty,
+      remaining_quantity: trade.quantity,
     });
 
     await logEvent(
       trade.id,
       trade.symbol,
       isLive ? "live_order_filled" : "order_filled",
-      `Filled @ ${fill.toPrecision(6)} · Dual Brackets: TP1 ${sizeTP1} @ ${tp1Price.toPrecision(6)} (+2.0%), TP2 ${sizeTP2} @ ${tp2Price.toPrecision(6)} (+3.5%), SL ${totalQty} @ ${initialSlPrice.toPrecision(6)} (-1.5%)`,
+      `Trade 2 Limit Buy filled @ ${fill.toPrecision(6)} for ${trade.quantity} contracts. Native WEEX Preset TP (+3.5%) & SL (-1.5%) active on exchange.`,
     );
     return;
   }
@@ -576,30 +472,29 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
       trade.id,
       trade.symbol,
       "order_cancelled",
-      "Order cancelled on exchange",
+      "Limit buy cancelled on exchange",
     );
     return;
   }
 
   const expiry =
-    Date.parse(trade.placed_at ?? trade.alerted_at) +
-    WEEX_CONFIG.ORDER_EXPIRY_HOURS * 60 * 60_000;
+    Date.parse(trade.placed_at ?? trade.alerted_at) + 15 * 60_000;
   if (Date.now() >= expiry) {
     try {
       if (trade.entry_order_id) await cancelOrder(weexSymbol, trade.entry_order_id);
     } catch (error) {
-      console.error("Cancel expired order failed:", error);
+      console.error("Cancel expired limit order failed:", error);
     }
     await update(trade.id, {
       status: "expired",
       closed_at: new Date().toISOString(),
-      close_reason: "unfilled_expiry",
+      close_reason: "unfilled_15m_expiry",
     });
     await logEvent(
       trade.id,
       trade.symbol,
       "order_expired",
-      `Unfilled after ${WEEX_CONFIG.ORDER_EXPIRY_HOURS}h — limit buy cancelled`,
+      `Unfilled after 15m — pullback limit buy cancelled`,
     );
   }
 }
