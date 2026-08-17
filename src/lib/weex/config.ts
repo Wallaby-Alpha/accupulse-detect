@@ -12,9 +12,13 @@ function parseEnvNum(key: string, fallback: number): number {
 }
 
 export const WEEX_CONFIG = {
-  /** Fixed Notional Position Value ($140.00 USD). */
+  /** Fixed Notional Position Value ($140.00 USD total across 2 tranches). */
   get NOTIONAL_POSITION_USD(): number {
     return parseEnvNum("NOTIONAL_POSITION_USD", parseEnvNum("NOTIONAL_USD", 140.0));
+  },
+  /** Tranche Notional Position Value ($70.00 USD per tranche). */
+  get TRANCHE_NOTIONAL_USD(): number {
+    return parseEnvNum("TRANCHE_NOTIONAL_USD", parseEnvNum("NOTIONAL_USD", 140.0) / 2);
   },
   /** Legacy risk usd getter for backward compatibility. */
   get FIXED_RISK_USD(): number {
@@ -24,9 +28,17 @@ export const WEEX_CONFIG = {
   get VELOCITY_DELAY_MINUTES(): number {
     return parseEnvNum("VELOCITY_DELAY_MINUTES", 5);
   },
-  /** Discard the signal if the 5m move is at or below this. */
+  /** Discard the signal if the 5m move is at or below this (-1.5%). */
   get VELOCITY_MAX_DROP(): number {
     return parseEnvNum("VELOCITY_MAX_DROP", -0.015);
+  },
+  /** Tranche 2 limit entry pullback offset from 5m price (-1.0%). */
+  get PULLBACK_OFFSET(): number {
+    return parseEnvNum("PULLBACK_OFFSET", -0.010);
+  },
+  /** Cancel unfilled Tranche 2 limit buy after this many minutes (15m). */
+  get PULLBACK_EXPIRY_MINUTES(): number {
+    return parseEnvNum("PULLBACK_EXPIRY_MINUTES", 15);
   },
   /** Limit entry offset from alert price. */
   get ENTRY_OFFSET(): number {

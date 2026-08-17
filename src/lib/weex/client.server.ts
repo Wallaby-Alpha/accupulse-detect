@@ -422,13 +422,87 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
         signed: true,
       });
       console.log(`[WEEX ENGINE] Dynamic ${leverage}x Isolated Leverage ENFORCED for ${formattedSymbol}`);
-      return true;
     } catch (err) {
       console.warn(`[WEEX ENGINE] Leverage endpoint ${ep.path} error: ${(err as Error).message}`);
     }
   }
 
   return false;
+}
+
+/** Market buy to open a long position in WEEX Paper Trading mode / Live mode. */
+export async function marketBuyLong(
+  symbol: string,
+  size: number,
+  clientOid: string,
+  presetTakeProfitPrice?: number,
+  presetStopLossPrice?: number,
+): Promise<string | null> {
+  const formattedSymbol = toWeexSymbol(symbol);
+  await setWeexLeverage(formattedSymbol, 5);
+
+  const contract = await getContract(formattedSymbol);
+  const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
+  const stepStr = getContractStepSize(contract);
+
+  let formattedSize = floorToStep(size, stepStr);
+  if (formattedSize < minOrderSize) {
+    formattedSize = minOrderSize;
+  }
+
+  const formattedTp = presetTakeProfitPrice ? String(await toContractPrice(formattedSymbol, presetTakeProfitPrice)) : undefined;
+  const formattedSl = presetStopLossPrice ? String(await toContractPrice(formattedSymbol, presetStopLossPrice)) : undefined;
+
+  if (isDemoMode()) {
+    const simSymbol = await toSimSymbol(symbol);
+    const endpointPath = "/capi/v3/sim/order";
+    const fullUrl = `https://api-contract.weex.com${endpointPath}`;
+
+    console.log(`[WEEX PAPER TRADING] Executing Market Buy Order at URL: ${fullUrl}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}`);
+
+    try {
+      const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
+        body: {
+          symbol: simSymbol,
+          side: "BUY",
+          positionSide: "LONG",
+          type: "MARKET",
+          marginType: "ISOLATED",
+          quantity: String(formattedSize),
+          newClientOrderId: clientOid || `sim-mkt-${Date.now()}`,
+          presetTakeProfitPrice: formattedTp,
+          presetStopLossPrice: formattedSl,
+        },
+        signed: true,
+      });
+      const orderId = extractOrderId(res);
+      if (orderId) return orderId;
+    } catch (error) {
+      return handleDemoOrderFallback("Market Buy", simSymbol, error);
+    }
+    return `sim-buy-${Date.now()}`;
+  }
+
+  const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
+    body: {
+      symbol: formattedSymbol,
+      client_oid: clientOid,
+      size: String(formattedSize),
+      type: "1", // open long
+      side: "open_long",
+      holdSide: "long",
+      positionSide: "LONG",
+      order_type: "0",
+      match_price: "1", // market buy
+      price: "0",
+      marginMode: 3, // Isolated Margin Mode
+      presetTakeProfitPrice: formattedTp,
+      presetStopLossPrice: formattedSl,
+    },
+    signed: true,
+  });
+  return extractOrderId(res);
 }
 
 /** Limit buy to open a long position in WEEX Paper Trading mode (/capi/v3/sim/order). */
