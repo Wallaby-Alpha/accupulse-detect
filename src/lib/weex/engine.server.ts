@@ -238,8 +238,20 @@ export async function registerSignal(
 /* ------------------------------ state handlers ---------------------------- */
 
 async function handlePendingVelocity(trade: TradeRow): Promise<void> {
-  const due =
-    Date.parse(trade.alerted_at) + WEEX_CONFIG.VELOCITY_DELAY_MINUTES * 60_000;
+  const alertedTime = Date.parse(trade.alerted_at);
+  const due = alertedTime + WEEX_CONFIG.VELOCITY_DELAY_MINUTES * 60_000;
+
+  // Auto-discard stale pending_velocity rows older than 60 minutes
+  if (Date.now() > alertedTime + 60 * 60_000) {
+    await update(trade.id, {
+      status: "discarded",
+      closed_at: new Date().toISOString(),
+      close_reason: "stale_pending_velocity",
+    });
+    await logEvent(trade.id, trade.symbol, "velocity_expired", "Stale pending_velocity (>60m) — auto-discarded");
+    return;
+  }
+
   if (Date.now() < due) return;
 
   const price_5m = await mexcPrice(trade.symbol);
