@@ -291,9 +291,14 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     const contract = await getContract(weexSymbol);
     const stepStr = getContractStepSize(contract);
     const tickStr = contract?.tick_size || "0.0001";
+    const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
 
     // 2A. Tranche 1 (Immediate Market Fill - $70 Notional)
-    const qty1 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / price_5m, stepStr);
+    let qty1 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / price_5m, stepStr);
+    if (qty1 > maxOrderSize) {
+      qty1 = floorToStep(maxOrderSize, stepStr);
+    }
+
     if (qty1 <= 0) {
       await update(trade.id, {
         status: "discarded",
@@ -311,15 +316,10 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       return;
     }
 
-    const t1SlPriceEst = price_5m * (1 + WEEX_CONFIG.STOP_OFFSET);
-    const t1Tp2PriceEst = price_5m * (1 + WEEX_CONFIG.TP2_OFFSET);
-
     const mktOrderId = await marketBuyLong(
       weexSymbol,
       qty1,
       `t1-${trade.id.slice(0, 18)}`,
-      t1Tp2PriceEst,
-      t1SlPriceEst,
     );
 
     const fillPrice1 = (await getTicker(weexSymbol)) ?? price_5m;
@@ -370,9 +370,10 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
 
     // 2B. Tranche 2 (Pullback Limit Order - $70 Notional @ -1.0% Pullback)
     const limitPrice2 = roundToStep(price_5m * (1 + WEEX_CONFIG.PULLBACK_OFFSET), tickStr);
-    const qty2 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / limitPrice2, stepStr);
-    const t2SlPriceEst = limitPrice2 * (1 + WEEX_CONFIG.STOP_OFFSET);
-    const t2Tp2PriceEst = limitPrice2 * (1 + WEEX_CONFIG.TP2_OFFSET);
+    let qty2 = floorToStep(WEEX_CONFIG.TRANCHE_NOTIONAL_USD / limitPrice2, stepStr);
+    if (qty2 > maxOrderSize) {
+      qty2 = floorToStep(maxOrderSize, stepStr);
+    }
 
     let limitOrderId2: string | null = null;
     if (qty2 > 0) {
@@ -382,8 +383,6 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
           limitPrice2,
           qty2,
           `t2-${trade.id.slice(0, 18)}`,
-          t2Tp2PriceEst,
-          t2SlPriceEst,
         );
       } catch (err) {
         console.warn(`Tranche 2 limit order submit error for ${trade.symbol}:`, (err as Error).message);
