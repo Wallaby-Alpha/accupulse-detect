@@ -696,23 +696,53 @@ export async function placePlanOrder(
     return `sim-plan-${Date.now()}`;
   }
 
-  const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/plan_order", {
-    body: {
-      symbol: formattedSymbol,
-      client_oid: clientOid,
-      size: String(formattedSize),
-      type: "3", // close long
-      side: "close_long",
-      holdSide: "long",
-      positionSide: "LONG",
-      match_type: matchPrice,
-      marginMode: 3, // Isolated Margin Mode
-      trigger_price: String(formattedTrigger),
-      execute_price: String(formattedExecute),
-    },
-    signed: true,
-  });
-  return extractOrderId(res);
+  try {
+    const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/plan_order", {
+      body: {
+        symbol: formattedSymbol,
+        client_oid: clientOid,
+        size: String(formattedSize),
+        type: "3", // close long
+        side: "close_long",
+        holdSide: "long",
+        positionSide: "LONG",
+        match_type: matchPrice,
+        marginMode: 3, // Isolated Margin Mode
+        trigger_price: String(formattedTrigger),
+        execute_price: String(formattedExecute),
+      },
+      signed: true,
+    });
+    return extractOrderId(res);
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const match = rawMsg.match(/order\s+(\d+)\s+position\s+side\s+invalid/i);
+    if (match && match[1]) {
+      const conflictingId = match[1];
+      console.warn(`[WEEX PLAN ORDER] Conflicting old plan order ${conflictingId} detected on ${formattedSymbol}. Cancelling old order and retrying...`);
+      try { await cancelPlanOrder(formattedSymbol, conflictingId); } catch {}
+      try { await cancelOrder(formattedSymbol, conflictingId); } catch {}
+
+      const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/plan_order", {
+        body: {
+          symbol: formattedSymbol,
+          client_oid: `${clientOid}-re`,
+          size: String(formattedSize),
+          type: "3",
+          side: "close_long",
+          holdSide: "long",
+          positionSide: "LONG",
+          match_type: matchPrice,
+          marginMode: 3,
+          trigger_price: String(formattedTrigger),
+          execute_price: String(formattedExecute),
+        },
+        signed: true,
+      });
+      return extractOrderId(res);
+    }
+    throw err;
+  }
 }
 
 export async function cancelOrder(symbol: string, orderId: string): Promise<void> {

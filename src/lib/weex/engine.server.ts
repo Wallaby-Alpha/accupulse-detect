@@ -344,6 +344,11 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
           "0",
         );
       }
+    } catch (err) {
+      console.warn(`Tranche 1 TP1 plan order error for ${trade.symbol}:`, (err as Error).message);
+    }
+
+    try {
       if (sizeTP2_t1 > 0) {
         t1Tp2Id = await placePlanOrder(
           weexSymbol,
@@ -354,6 +359,11 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
           "0",
         );
       }
+    } catch (err) {
+      console.warn(`Tranche 1 TP2 plan order error for ${trade.symbol}:`, (err as Error).message);
+    }
+
+    try {
       if (qty1 > 0) {
         t1SlId = await placePlanOrder(
           weexSymbol,
@@ -365,7 +375,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
         );
       }
     } catch (err) {
-      console.warn(`Tranche 1 plan orders error for ${trade.symbol}:`, (err as Error).message);
+      console.warn(`Tranche 1 SL plan order error for ${trade.symbol}:`, (err as Error).message);
     }
 
     // 2B. Tranche 2 (Pullback Limit Order - $70 Notional @ -1.0% Pullback)
