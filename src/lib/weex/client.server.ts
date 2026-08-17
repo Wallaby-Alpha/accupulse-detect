@@ -430,13 +430,11 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
   return false;
 }
 
-/** Market buy to open a long position with native preset TP and SL attached directly to entry payload. */
+/** Market buy to open a long position in WEEX Paper Trading mode / Live mode. */
 export async function marketBuyLong(
   symbol: string,
   size: number,
   clientOid: string,
-  presetTakeProfitPrice?: number,
-  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -454,36 +452,25 @@ export async function marketBuyLong(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
-  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
-    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
-    : undefined;
-  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
-    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
-    : undefined;
-
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Executing Market Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
-
-    const simBody: Record<string, unknown> = {
-      symbol: simSymbol,
-      side: "BUY",
-      positionSide: "LONG",
-      type: "MARKET",
-      marginType: "ISOLATED",
-      quantity: String(formattedSize),
-      newClientOrderId: clientOid || `sim-mkt-${Date.now()}`,
-    };
-    if (formattedTp) simBody["presetTakeProfitPrice"] = formattedTp;
-    if (formattedSl) simBody["presetStopLossPrice"] = formattedSl;
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}`);
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
-        body: simBody,
+        body: {
+          symbol: simSymbol,
+          side: "BUY",
+          positionSide: "LONG",
+          type: "MARKET",
+          marginType: "ISOLATED",
+          quantity: String(formattedSize),
+          newClientOrderId: clientOid || `sim-mkt-${Date.now()}`,
+        },
         signed: true,
       });
       const orderId = extractOrderId(res);
@@ -494,37 +481,31 @@ export async function marketBuyLong(
     return `sim-buy-${Date.now()}`;
   }
 
-  const body: Record<string, unknown> = {
-    symbol: formattedSymbol,
-    client_oid: clientOid,
-    size: String(formattedSize),
-    type: "1", // open long
-    side: "open_long",
-    holdSide: "long",
-    positionSide: "LONG",
-    order_type: "0",
-    match_price: "1", // market buy
-    price: "0",
-    marginMode: 3, // Isolated Margin Mode
-  };
-  if (formattedTp) body["presetTakeProfitPrice"] = formattedTp;
-  if (formattedSl) body["presetStopLossPrice"] = formattedSl;
-
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
-    body,
+    body: {
+      symbol: formattedSymbol,
+      client_oid: clientOid,
+      size: String(formattedSize),
+      type: "1", // open long
+      side: "open_long",
+      holdSide: "long",
+      positionSide: "LONG",
+      order_type: "0",
+      match_price: "1", // market buy
+      price: "0",
+      marginMode: 3, // Isolated Margin Mode
+    },
     signed: true,
   });
   return extractOrderId(res);
 }
 
-/** Limit buy to open a long position with native preset TP and SL attached directly to entry payload. */
+/** Limit buy to open a long position in WEEX Paper Trading mode / Live mode. */
 export async function placeLimitBuy(
   symbol: string,
   price: number,
   size: number,
   clientOid: string,
-  presetTakeProfitPrice?: number,
-  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -543,38 +524,27 @@ export async function placeLimitBuy(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
-  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
-    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
-    : undefined;
-  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
-    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
-    : undefined;
-
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Placing Limit Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
-
-    const simBody: Record<string, unknown> = {
-      symbol: simSymbol,
-      side: "BUY",
-      positionSide: "LONG",
-      type: "LIMIT",
-      marginType: "ISOLATED",
-      quantity: String(formattedSize),
-      price: String(formattedPrice),
-      timeInForce: "GTC",
-      newClientOrderId: clientOid || `sim-${Date.now()}`,
-    };
-    if (formattedTp) simBody["presetTakeProfitPrice"] = formattedTp;
-    if (formattedSl) simBody["presetStopLossPrice"] = formattedSl;
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}`);
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
-        body: simBody,
+        body: {
+          symbol: simSymbol,
+          side: "BUY",
+          positionSide: "LONG",
+          type: "LIMIT",
+          marginType: "ISOLATED",
+          quantity: String(formattedSize),
+          price: String(formattedPrice),
+          timeInForce: "GTC",
+          newClientOrderId: clientOid || `sim-${Date.now()}`,
+        },
         signed: true,
       });
       const orderId = extractOrderId(res);
@@ -585,24 +555,20 @@ export async function placeLimitBuy(
     return `sim-buy-${Date.now()}`;
   }
 
-  const body: Record<string, unknown> = {
-    symbol: formattedSymbol,
-    client_oid: clientOid,
-    size: String(formattedSize),
-    type: "1", // open long
-    side: "open_long",
-    holdSide: "long",
-    positionSide: "LONG",
-    order_type: "0", // normal
-    match_price: "0", // limit
-    price: String(formattedPrice),
-    marginMode: 3, // Isolated Margin Mode
-  };
-  if (formattedTp) body["presetTakeProfitPrice"] = formattedTp;
-  if (formattedSl) body["presetStopLossPrice"] = formattedSl;
-
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
-    body,
+    body: {
+      symbol: formattedSymbol,
+      client_oid: clientOid,
+      size: String(formattedSize),
+      type: "1", // open long
+      side: "open_long",
+      holdSide: "long",
+      positionSide: "LONG",
+      order_type: "0", // normal
+      match_price: "0", // limit
+      price: String(formattedPrice),
+      marginMode: 3, // Isolated Margin Mode
+    },
     signed: true,
   });
   return extractOrderId(res);
