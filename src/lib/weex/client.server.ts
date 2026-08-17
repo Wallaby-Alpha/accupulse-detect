@@ -434,9 +434,7 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
 export async function marketBuyLong(
   symbol: string,
   size: number,
-  clientOid: string,
-  presetTakeProfitPrice?: number,
-  presetStopLossPrice?: number,
+  clientOid?: string,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -454,20 +452,13 @@ export async function marketBuyLong(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
-  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
-    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
-    : undefined;
-  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
-    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
-    : undefined;
-
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Executing Market Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}`);
 
     const simBody: Record<string, unknown> = {
       symbol: simSymbol,
@@ -478,8 +469,6 @@ export async function marketBuyLong(
       quantity: String(formattedSize),
       newClientOrderId: clientOid || `sim-mkt-${Date.now()}`,
     };
-    if (formattedTp) simBody["presetTakeProfitPrice"] = formattedTp;
-    if (formattedSl) simBody["presetStopLossPrice"] = formattedSl;
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
@@ -507,8 +496,6 @@ export async function marketBuyLong(
     price: "0",
     marginMode: 3, // Isolated Margin Mode
   };
-  if (formattedTp) body["presetTakeProfitPrice"] = formattedTp;
-  if (formattedSl) body["presetStopLossPrice"] = formattedSl;
 
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body,
@@ -523,8 +510,6 @@ export async function placeLimitBuy(
   price: number,
   size: number,
   clientOid: string,
-  presetTakeProfitPrice?: number,
-  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -543,20 +528,13 @@ export async function placeLimitBuy(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
-  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
-    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
-    : undefined;
-  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
-    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
-    : undefined;
-
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Placing Limit Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}`);
 
     const simBody: Record<string, unknown> = {
       symbol: simSymbol,
@@ -569,8 +547,6 @@ export async function placeLimitBuy(
       timeInForce: "GTC",
       newClientOrderId: clientOid || `sim-${Date.now()}`,
     };
-    if (formattedTp) simBody["presetTakeProfitPrice"] = formattedTp;
-    if (formattedSl) simBody["presetStopLossPrice"] = formattedSl;
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
@@ -598,8 +574,6 @@ export async function placeLimitBuy(
     price: String(formattedPrice),
     marginMode: 3, // Isolated Margin Mode
   };
-  if (formattedTp) body["presetTakeProfitPrice"] = formattedTp;
-  if (formattedSl) body["presetStopLossPrice"] = formattedSl;
 
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body,

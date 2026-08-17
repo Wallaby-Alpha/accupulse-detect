@@ -335,9 +335,22 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       weexSymbol,
       qty1,
       `t1-${trade.id.slice(0, 18)}`,
-      tp1,
-      sl1,
     );
+
+    let t1TpId: string | null = null;
+    let t1SlId: string | null = null;
+
+    try {
+      t1TpId = await placePlanOrder(weexSymbol, tp1, tp1, qty1, `tp-t1-${trade.id.slice(0, 14)}`, "0");
+    } catch (err) {
+      console.warn(`Trade 1 TP plan order error for ${trade.symbol}:`, (err as Error).message);
+    }
+
+    try {
+      t1SlId = await placePlanOrder(weexSymbol, sl1, sl1, qty1, `sl-t1-${trade.id.slice(0, 14)}`, "1");
+    } catch (err) {
+      console.warn(`Trade 1 SL plan order error for ${trade.symbol}:`, (err as Error).message);
+    }
 
     const fillPrice1 = (await getTicker(weexSymbol)) ?? price_5m;
     const now = new Date().toISOString();
@@ -351,6 +364,8 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       target_price: tp1,
       quantity: qty1,
       entry_order_id: mktOrderId,
+      tp_order_id: t1TpId,
+      sl_order_id: t1SlId,
       placed_at: now,
       filled_at: now,
       remaining_quantity: qty1,
@@ -361,7 +376,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
       trade.id,
       trade.symbol,
       "tranche1_filled",
-      `Trade 1 ($70 Market Buy) filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)}. Native WEEX Preset TP (+3.5%) @ ${tp1.toPrecision(6)} & Preset SL (-1.5%) @ ${sl1.toPrecision(6)} attached to payload.`,
+      `Trade 1 ($70 Market Buy) filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)}. Exchange Plan Orders TP (+3.5%) & SL (-1.5%) created on order book.`,
     );
 
     // --- TRADE 2: TRANCHE 2 (Pullback Limit Buy - $70 Notional @ -1.0% Pullback) ---
@@ -393,8 +408,6 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
         limitPrice2,
         qty2,
         `t2-${tradeId2.slice(0, 18)}`,
-        tp2,
-        sl2,
       );
 
       await update(tradeId2, {
@@ -416,7 +429,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
         tradeId2,
         trade.symbol,
         "tranche2_submitted",
-        `Trade 2 ($70 Limit Buy @ -1.0% pullback) placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)}. Native WEEX Preset TP (+3.5%) @ ${tp2.toPrecision(6)} & Preset SL (-1.5%) @ ${sl2.toPrecision(6)} attached to payload. 15m expiry active.`,
+        `Trade 2 ($70 Limit Buy @ -1.0% pullback) placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)}. Brackets will attach upon fill. 15m expiry active.`,
       );
     }
 
