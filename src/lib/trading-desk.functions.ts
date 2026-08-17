@@ -69,7 +69,7 @@ export const getTradingDesk = createServerFn({ method: "GET" }).handler(async ()
   const trades = Array.from(tradeMap.values());
   const events = Array.from(eventMap.values());
 
-  const closed = trades.filter((t) => t.status === "closed");
+  const closed = trades.filter((t) => t.status === "closed" || t.status === "CLOSED");
   const wins = closed.filter((t) => Number(t.realized_pnl ?? 0) > 0).length;
 
   return {

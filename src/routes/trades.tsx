@@ -49,6 +49,7 @@ const STATUS_STYLE: Record<string, string> = {
   order_open: "text-primary",
   filled: "text-foreground",
   closed: "text-muted-foreground",
+  CLOSED: "text-muted-foreground",
   discarded: "text-muted-foreground",
   expired: "text-muted-foreground",
   blocked: "text-destructive",
@@ -73,7 +74,7 @@ function TradingDesk() {
     ["pending_velocity", "order_open", "filled", "blocked"].includes(t.status),
   );
   const history = data.trades.filter((t) =>
-    ["closed", "discarded", "expired"].includes(t.status),
+    ["closed", "CLOSED", "discarded", "expired"].includes(t.status),
   );
 
   return (

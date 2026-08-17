@@ -18,6 +18,8 @@ import {
   cancelAllOpenOrdersForSymbol,
   cancelOrder,
   cancelPlanOrder,
+  getContract,
+  getContractStepSize,
   getOrderDetail,
   getTicker,
   getWeexCredentials,
@@ -26,6 +28,7 @@ import {
   marketCloseLong,
   placeLimitBuy,
   placePlanOrder,
+  splitQuantity5050,
   toContractSize,
   WeexError,
 } from "./client.server";
@@ -47,6 +50,14 @@ type TradeRow = {
   placed_at: string | null;
   filled_at: string | null;
   fill_price: number | null;
+  tp1_price?: number | null;
+  tp2_price?: number | null;
+  tp1_filled?: boolean | null;
+  tp1_order_id?: string | null;
+  tp2_order_id?: string | null;
+  sl_moved_to_be?: boolean | null;
+  high_water_price?: number | null;
+  remaining_quantity?: number | null;
 };
 
 async function logEvent(
@@ -63,11 +74,44 @@ async function logEvent(
   });
 }
 
+const SUPABASE_COLUMNS = new Set([
+  "id",
+  "symbol",
+  "alert_price",
+  "alerted_at",
+  "status",
+  "velocity_pct",
+  "entry_price",
+  "stop_price",
+  "target_price",
+  "quantity",
+  "entry_order_id",
+  "tp_order_id",
+  "sl_order_id",
+  "placed_at",
+  "filled_at",
+  "fill_price",
+  "closed_at",
+  "close_price",
+  "close_reason",
+  "realized_pnl",
+  "last_error",
+  "created_at",
+  "updated_at",
+]);
+
 async function update(id: string, patch: Record<string, unknown>): Promise<void> {
   const updated_at = new Date().toISOString();
+  const dbPatch: Record<string, unknown> = { updated_at };
+  for (const [k, v] of Object.entries(patch)) {
+    if (SUPABASE_COLUMNS.has(k)) {
+      dbPatch[k] = v;
+    }
+  }
+
   await supabaseAdmin
     .from("weex_trades")
-    .update({ ...patch, updated_at })
+    .update(dbPatch as any)
     .eq("id", id);
 
   try {
@@ -322,23 +366,87 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
   if (isFilled(detail)) {
     const fill = Number(detail?.price_avg) || Number(trade.entry_price);
     const isLive = !isDemoMode();
+
+    const contract = await getContract(weexSymbol);
+    const stepStr = getContractStepSize(contract);
+    const totalQty = Number(trade.quantity ?? 0);
+    const { sizeTP1, sizeTP2 } = splitQuantity5050(totalQty, stepStr);
+
+    const tp1Price = fill * (1 + WEEX_CONFIG.TP1_OFFSET);
+    const tp2Price = fill * (1 + WEEX_CONFIG.TP2_OFFSET);
+    const initialSlPrice = fill * (1 + WEEX_CONFIG.STOP_OFFSET);
+
+    let tp1OrderId: string | null = null;
+    let tp2OrderId: string | null = null;
+    let slOrderId: string | null = null;
+
+    try {
+      if (sizeTP1 > 0) {
+        tp1OrderId = await placePlanOrder(
+          weexSymbol,
+          tp1Price,
+          tp1Price,
+          sizeTP1,
+          `tp1-${trade.id.slice(0, 18)}`,
+          "0",
+        );
+      }
+      if (sizeTP2 > 0) {
+        tp2OrderId = await placePlanOrder(
+          weexSymbol,
+          tp2Price,
+          tp2Price,
+          sizeTP2,
+          `tp2-${trade.id.slice(0, 18)}`,
+          "0",
+        );
+      }
+      if (totalQty > 0) {
+        slOrderId = await placePlanOrder(
+          weexSymbol,
+          initialSlPrice,
+          initialSlPrice,
+          totalQty,
+          `sl-${trade.id.slice(0, 18)}`,
+          "1",
+        );
+      }
+    } catch (err) {
+      console.warn(`Attach plan orders error for ${trade.symbol}:`, (err as Error).message);
+    }
+
+    const combinedTpId = [tp1OrderId, tp2OrderId].filter(Boolean).join(",") || trade.tp_order_id;
+
     await update(trade.id, {
       status: "filled",
       filled_at: new Date().toISOString(),
       fill_price: fill,
+      stop_price: initialSlPrice,
+      target_price: tp2Price,
+      tp1_price: tp1Price,
+      tp2_price: tp2Price,
+      tp1_order_id: tp1OrderId,
+      tp2_order_id: tp2OrderId,
+      tp_order_id: combinedTpId,
+      sl_order_id: slOrderId || trade.sl_order_id,
+      tp1_filled: false,
+      sl_moved_to_be: false,
+      high_water_price: fill,
+      remaining_quantity: totalQty,
     });
+
     await logEvent(
       trade.id,
       trade.symbol,
       isLive ? "live_order_filled" : "order_filled",
-      `Filled @ ${fill.toPrecision(6)} — ${WEEX_CONFIG.TIME_EXIT_MINUTES}m timer started`,
+      `Filled @ ${fill.toPrecision(6)} · Dual Brackets: TP1 ${sizeTP1} @ ${tp1Price.toPrecision(6)} (+2.0%), TP2 ${sizeTP2} @ ${tp2Price.toPrecision(6)} (+3.5%), SL ${totalQty} @ ${initialSlPrice.toPrecision(6)} (-1.5%)`,
     );
     return;
   }
 
   if (detail?.status === "canceled" || detail?.status === "cancelled") {
     await update(trade.id, {
-      status: "closed",
+      status: "CLOSED",
       closed_at: new Date().toISOString(),
       close_reason: "order_cancelled",
     });
@@ -374,23 +482,43 @@ async function handleOrderOpen(trade: TradeRow): Promise<void> {
   }
 }
 
+export function isPositionAlreadyClosedError(error: unknown): boolean {
+  if (!error) return false;
+  const errObj = error as { code?: string | number; message?: string; msg?: string };
+  const codeStr = error instanceof WeexError
+    ? String(error.code ?? "")
+    : String(errObj.code ?? "");
+  const rawMsg = error instanceof Error
+    ? error.message
+    : String(errObj.message ?? errObj.msg ?? error);
+  const codeMatch = codeStr === "40015" || codeStr === "-40015" || rawMsg.includes("40015");
+  const msgMatch =
+    rawMsg.toLowerCase().includes("position side invalid") ||
+    rawMsg.toLowerCase().includes("position side is invalid") ||
+    rawMsg.toLowerCase().includes("position already closed");
+  return codeMatch || msgMatch;
+}
 
-async function closeTrade(
+async function closeTradeWithPnl(
   trade: TradeRow,
-  price: number,
-  reason: "take_profit" | "stop_loss" | "time_exit",
+  closePrice: number,
+  reason: "take_profit" | "stop_loss" | "time_exit" | "already_closed",
+  customPnl?: number,
 ): Promise<void> {
   const weexSymbol = toWeexSymbol(trade.symbol);
 
-  // Cancel remaining native exchange plan orders if position closed
-  const cancelTargets =
-    reason === "take_profit"
-      ? [trade.sl_order_id]
-      : reason === "stop_loss"
-      ? [trade.tp_order_id]
-      : [trade.tp_order_id, trade.sl_order_id];
+  // Cancel remaining native exchange plan orders (TP1, TP2, SL)
+  const allPlanIds = [
+    trade.tp_order_id,
+    trade.sl_order_id,
+    trade.tp1_order_id,
+    trade.tp2_order_id,
+  ]
+    .filter(Boolean)
+    .join(",")
+    .split(",");
 
-  for (const id of cancelTargets) {
+  for (const id of allPlanIds) {
     if (id) {
       try {
         await cancelPlanOrder(weexSymbol, id);
@@ -401,60 +529,52 @@ async function closeTrade(
   }
 
   const fill = Number(trade.fill_price ?? trade.entry_price);
-  const pnl = (price - fill) * Number(trade.quantity);
+  const totalQty = Number(trade.quantity ?? 0);
+  const contract = await getContract(weexSymbol);
+  const stepStr = getContractStepSize(contract);
+  const { sizeTP1, sizeTP2 } = splitQuantity5050(totalQty, stepStr);
+
+  let pnl = customPnl;
+  if (pnl === undefined) {
+    if (trade.tp1_filled) {
+      const tp1Price = Number(trade.tp1_price ?? (fill * (1 + WEEX_CONFIG.TP1_OFFSET)));
+      const pnl1 = (tp1Price - fill) * sizeTP1;
+      const pnl2 = (closePrice - fill) * sizeTP2;
+      pnl = pnl1 + pnl2;
+    } else {
+      pnl = (closePrice - fill) * totalQty;
+    }
+  }
+
   await update(trade.id, {
-    status: "closed",
+    status: "CLOSED",
     closed_at: new Date().toISOString(),
-    close_price: price,
+    close_price: closePrice,
     close_reason: reason,
     realized_pnl: pnl,
   });
+
   await logEvent(
     trade.id,
     trade.symbol,
     reason,
-    `Closed @ ${price.toFixed(6)} · PnL $${pnl.toFixed(2)} (${reason})`,
+    `Closed @ ${closePrice.toFixed(6)} · PnL $${pnl.toFixed(2)} (${reason})`,
   );
 }
 
-async function handleFilled(trade: TradeRow): Promise<void> {
-  const weexSymbol = toWeexSymbol(trade.symbol);
-  const price = await getTicker(weexSymbol);
-
-  // Exchange brackets do the closing; we detect which leg triggered.
-  if (price !== null) {
-    if (price >= Number(trade.target_price)) {
-      if (!trade.tp_order_id) {
-        // Fallback: bracket never attached, market close manually
-        let size = Number(trade.quantity);
-        if (size <= 0 && Number(trade.entry_price) > 0) {
-          size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
-        }
-        await marketCloseLong(weexSymbol, size, `tp-fallback-${trade.id.slice(0, 20)}`);
-      }
-      await closeTrade(trade, Number(trade.target_price), "take_profit");
-      return;
-    }
-    if (price <= Number(trade.stop_price)) {
-      if (!trade.sl_order_id) {
-        // Fallback: bracket never attached, market close manually
-        let size = Number(trade.quantity);
-        if (size <= 0 && Number(trade.entry_price) > 0) {
-          size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
-        }
-        await marketCloseLong(weexSymbol, size, `sl-fallback-${trade.id.slice(0, 20)}`);
-      }
-      await closeTrade(trade, Number(trade.stop_price), "stop_loss");
-      return;
-    }
-  }
-
+export async function checkTimeExits(
+  trade: TradeRow,
+  currentPrice?: number | null,
+): Promise<boolean> {
   const deadline =
     Date.parse(trade.filled_at ?? trade.alerted_at) +
     WEEX_CONFIG.TIME_EXIT_MINUTES * 60_000;
-  if (Date.now() < deadline) return;
+  if (Date.now() < deadline) return false;
 
-  console.log(`[WEEX ENGINE] 60-Minute Time Exit triggered for ${trade.symbol}. Cancelling native brackets & market closing...`);
+  const weexSymbol = toWeexSymbol(trade.symbol);
+  console.log(
+    `[WEEX ENGINE] 60-Minute Time Exit triggered for ${trade.symbol}. Cancelling native brackets & market closing...`,
+  );
 
   // 1. Cancel all attached native exchange limit and plan orders
   try {
@@ -463,10 +583,16 @@ async function handleFilled(trade: TradeRow): Promise<void> {
     /* ignore cancel errors */
   }
 
-  // 2. Transmit market close order to WEEX exchange
-  let closePrice = price ?? Number(trade.fill_price ?? trade.entry_price);
+  // 2. Transmit market close order to WEEX exchange for remaining open quantity
+  let closePrice = currentPrice ?? Number(trade.fill_price ?? trade.entry_price);
+  const contract = await getContract(weexSymbol);
+  const stepStr = getContractStepSize(contract);
+  const totalQty = Number(trade.quantity ?? 0);
+  const { sizeTP1, sizeTP2 } = splitQuantity5050(totalQty, stepStr);
+  const activeRemainingQty = trade.tp1_filled ? sizeTP2 : totalQty;
+
   try {
-    let size = Number(trade.quantity);
+    let size = activeRemainingQty > 0 ? activeRemainingQty : totalQty;
     if (size <= 0 && Number(trade.entry_price) > 0) {
       size = await toContractSize(weexSymbol, WEEX_CONFIG.NOTIONAL_POSITION_USD, Number(trade.entry_price));
     }
@@ -474,12 +600,177 @@ async function handleFilled(trade: TradeRow): Promise<void> {
     closePrice = (await getTicker(weexSymbol)) ?? closePrice;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isPositionAlreadyClosedError(error)) {
+      console.warn(
+        `[WEEX ENGINE] 40015 Position side invalid for ${trade.symbol}. Immediately marking trade as CLOSED in Supabase.`,
+      );
+      await update(trade.id, {
+        status: "CLOSED",
+        closed_at: new Date().toISOString(),
+        close_price: closePrice,
+        close_reason: "already_closed_on_exchange",
+        last_error: `WEEX 40015: ${message}`,
+      });
+      await logEvent(
+        trade.id,
+        trade.symbol,
+        "position_already_closed",
+        `WEEX 40015 (position side invalid) — position already closed, marked trade as CLOSED in Supabase`,
+      );
+      return true;
+    }
     await update(trade.id, { last_error: `Time exit close failed: ${message}` });
     await logEvent(trade.id, trade.symbol, "time_exit_error", message);
+    return false;
+  }
+
+  await closeTradeWithPnl(trade, closePrice, "time_exit");
+  return true;
+}
+
+async function handleFilled(trade: TradeRow): Promise<void> {
+  const weexSymbol = toWeexSymbol(trade.symbol);
+  const fill = Number(trade.fill_price ?? trade.entry_price);
+  if (!fill || fill <= 0) return;
+
+  const contract = await getContract(weexSymbol);
+  const stepStr = getContractStepSize(contract);
+  const totalQty = Number(trade.quantity ?? 0);
+  const { sizeTP1, sizeTP2 } = splitQuantity5050(totalQty, stepStr);
+
+  const tp1Price = Number(trade.tp1_price ?? (fill * (1 + WEEX_CONFIG.TP1_OFFSET)));
+  const tp2Price = Number(trade.tp2_price ?? trade.target_price ?? (fill * (1 + WEEX_CONFIG.TP2_OFFSET)));
+  const currentStop = Number(trade.stop_price ?? (fill * (1 + WEEX_CONFIG.STOP_OFFSET)));
+
+  const price = await getTicker(weexSymbol);
+  if (price === null) {
+    await checkTimeExits(trade, null);
     return;
   }
 
-  await closeTrade(trade, closePrice, "time_exit");
+  // 1. High-Water Mark (MFE) Tracking
+  const prevHigh = Number(trade.high_water_price ?? fill);
+  const newHigh = Math.max(prevHigh, price);
+  if (newHigh > prevHigh) {
+    await update(trade.id, { high_water_price: newHigh });
+  }
+
+  // 2. Dynamic Break-Even Trigger (+1.5% MFE)
+  const beTriggerPrice = fill * (1 + WEEX_CONFIG.BREAKEVEN_TRIGGER_OFFSET);
+  const slMovedToBe = Boolean(trade.sl_moved_to_be);
+
+  if (!slMovedToBe && newHigh >= beTriggerPrice) {
+    console.log(`[WEEX ENGINE] Dynamic Break-Even Triggered for ${trade.symbol}! MFE price ${newHigh.toPrecision(6)} >= ${beTriggerPrice.toPrecision(6)} (+1.5%). Moving SL to entry ${fill.toPrecision(6)}.`);
+
+    if (trade.sl_order_id) {
+      const slIds = String(trade.sl_order_id).split(",");
+      for (const id of slIds) {
+        if (id) {
+          try { await cancelPlanOrder(weexSymbol, id); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    const remainingQty = trade.tp1_filled ? sizeTP2 : totalQty;
+    let newSlOrderId: string | null = null;
+    try {
+      if (remainingQty > 0) {
+        newSlOrderId = await placePlanOrder(
+          weexSymbol,
+          fill,
+          fill,
+          remainingQty,
+          `be-sl-${trade.id.slice(0, 18)}`,
+          "1",
+        );
+      }
+    } catch { /* ignore */ }
+
+    await update(trade.id, {
+      stop_price: fill,
+      sl_moved_to_be: true,
+      sl_order_id: newSlOrderId ?? trade.sl_order_id,
+    });
+
+    await logEvent(
+      trade.id,
+      trade.symbol,
+      "trailing_be_activated",
+      `Moved SL to entry price (${fill.toPrecision(6)}) for ${trade.symbol} after +1.5% MFE gain`,
+    );
+  }
+
+  // 3. TP1 Check (+2.0%)
+  const tp1Filled = Boolean(trade.tp1_filled);
+  if (!tp1Filled && price >= tp1Price) {
+    console.log(`[WEEX ENGINE] TP1 (+2.0%) Triggered for ${trade.symbol} @ ${price.toPrecision(6)}! Banking 50% (${sizeTP1} contracts).`);
+    const tp1Pnl = (tp1Price - fill) * sizeTP1;
+
+    let beSlOrderId: string | null = trade.sl_order_id ?? null;
+    if (!slMovedToBe && trade.sl_order_id) {
+      const slIds = String(trade.sl_order_id).split(",");
+      for (const id of slIds) {
+        if (id) {
+          try { await cancelPlanOrder(weexSymbol, id); } catch { /* ignore */ }
+        }
+      }
+      try {
+        if (sizeTP2 > 0) {
+          beSlOrderId = await placePlanOrder(
+            weexSymbol,
+            fill,
+            fill,
+            sizeTP2,
+            `be-sl-tp1-${trade.id.slice(0, 16)}`,
+            "1",
+          );
+        }
+      } catch { /* ignore */ }
+    }
+
+    await update(trade.id, {
+      tp1_filled: true,
+      stop_price: fill,
+      sl_moved_to_be: true,
+      sl_order_id: beSlOrderId,
+      remaining_quantity: sizeTP2,
+    });
+
+    await logEvent(
+      trade.id,
+      trade.symbol,
+      "tp1_filled",
+      `Banked 50% TP1 (${sizeTP1} contracts) @ ${tp1Price.toPrecision(6)} (+2.0%) · PnL $${tp1Pnl.toFixed(2)}. Remaining 50% runner (${sizeTP2}) active with Break-Even SL @ ${fill.toPrecision(6)}`,
+    );
+  }
+
+  // 4. Runner TP2 Check (+3.5% to +5.0%)
+  if (price >= tp2Price) {
+    console.log(`[WEEX ENGINE] Runner TP2 (+3.5% to +5.0%) Triggered for ${trade.symbol} @ ${price.toPrecision(6)}! Closing remaining position.`);
+    const activeQty = tp1Filled ? sizeTP2 : totalQty;
+    const pnl1 = tp1Filled ? (tp1Price - fill) * sizeTP1 : 0;
+    const pnl2 = (tp2Price - fill) * activeQty;
+    const totalPnl = pnl1 + pnl2;
+
+    await closeTradeWithPnl(trade, tp2Price, "take_profit", totalPnl);
+    return;
+  }
+
+  // 5. Stop-Loss Check (Initial -1.5% or Break-Even 0.0%)
+  const activeStop = trade.sl_moved_to_be || trade.tp1_filled ? fill : currentStop;
+  if (price <= activeStop) {
+    console.log(`[WEEX ENGINE] Stop-Loss Triggered for ${trade.symbol} @ ${price.toPrecision(6)} (Stop: ${activeStop.toPrecision(6)}). Closing remaining position.`);
+    const activeQty = tp1Filled ? sizeTP2 : totalQty;
+    const pnl1 = tp1Filled ? (tp1Price - fill) * sizeTP1 : 0;
+    const pnl2 = (activeStop - fill) * activeQty;
+    const totalPnl = pnl1 + pnl2;
+
+    await closeTradeWithPnl(trade, activeStop, "stop_loss", totalPnl);
+    return;
+  }
+
+  // 6. Time Exit Check (60 Minutes)
+  await checkTimeExits(trade, price);
 }
 
 /* ---------------------------------- tick ---------------------------------- */
@@ -509,8 +800,18 @@ export async function runTradeEngine(): Promise<{
       errors++;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Trade engine failed for ${row.symbol}:`, message);
-      await update(row.id, { last_error: message });
-      await logEvent(row.id, row.symbol, "engine_error", message);
+      if (isPositionAlreadyClosedError(err)) {
+        await update(row.id, {
+          status: "CLOSED",
+          closed_at: new Date().toISOString(),
+          close_reason: "already_closed_on_exchange",
+          last_error: `WEEX 40015: ${message}`,
+        });
+        await logEvent(row.id, row.symbol, "position_already_closed", message);
+      } else {
+        await update(row.id, { last_error: message });
+        await logEvent(row.id, row.symbol, "engine_error", message);
+      }
     }
   }
 

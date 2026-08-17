@@ -199,13 +199,14 @@ export async function getTicker(symbol: string): Promise<number | null> {
   return null;
 }
 
-type Contract = {
+export type Contract = {
   symbol: string;
   contract_val: string;
   size_increment: string;
   tick_size: string;
   minOrderSize?: string;
   maxOrderSize?: string;
+  stepSize?: string;
 };
 
 let contractCache: { at: number; map: Map<string, Contract> } | null = null;
@@ -226,37 +227,70 @@ export async function getContract(symbol: string): Promise<Contract | null> {
   return contractCache?.map.get(symbol) ?? null;
 }
 
+export function getContractStepSize(contract: Contract | null): string {
+  if (!contract) return "0.0001";
+  if (contract.stepSize) return String(contract.stepSize);
+  const minOrderSize = Number(contract.minOrderSize);
+  if (Number.isFinite(minOrderSize) && minOrderSize >= 1) {
+    return String(minOrderSize);
+  }
+  if (contract.size_increment) return String(contract.size_increment);
+  return "0.0001";
+}
+
 function getStepFromWeexFormat(format: string | undefined, defaultStep: number): number {
   if (!format) return defaultStep;
-  const num = parseFloat(format);
-  if (isNaN(num)) return defaultStep;
-  // If format is an integer between 0 and 8, it's a decimal precision (e.g., "4" -> 0.0001)
-  if (format.indexOf('.') === -1 && num >= 0 && num <= 8) {
-    if (num === 0) return 1;
-    return parseFloat(Math.pow(10, -num).toFixed(num));
-  }
-  // Otherwise, it's a direct step size (e.g., "10" or "0.001")
+  const str = String(format).trim();
+  if (!str) return defaultStep;
+  const num = parseFloat(str);
+  if (isNaN(num) || num <= 0) return defaultStep;
   return num;
 }
 
-function floorToStep(value: number, stepStr: string): number {
-  const step = getStepFromWeexFormat(stepStr, 0.0001);
-  const decimals = step.toString().includes('.') ? (step.toString().split('.')[1]?.length ?? 0) : 0;
-  const numSteps = Math.floor(value / step);
+export function floorToStep(value: number, stepStr: string | number): number {
+  const step = getStepFromWeexFormat(typeof stepStr === "number" ? String(stepStr) : stepStr, 0.0001);
+  if (step <= 0 || !Number.isFinite(value) || value <= 0) return 0;
+  const stepStrVal = step.toString();
+  const decimals = stepStrVal.includes('.') ? (stepStrVal.split('.')[1]?.length ?? 0) : 0;
+  const numSteps = Math.floor((value + 1e-12) / step);
   return parseFloat((numSteps * step).toFixed(decimals));
 }
 
-function roundToStep(value: number, stepStr: string): number {
-  const step = getStepFromWeexFormat(stepStr, 0.0001);
-  const decimals = step.toString().includes('.') ? (step.toString().split('.')[1]?.length ?? 0) : 0;
-  const numSteps = Math.round(value / step);
+export function roundToStep(value: number, stepStr: string | number): number {
+  const step = getStepFromWeexFormat(typeof stepStr === "number" ? String(stepStr) : stepStr, 0.0001);
+  if (step <= 0 || !Number.isFinite(value) || value <= 0) return 0;
+  const stepStrVal = step.toString();
+  const decimals = stepStrVal.includes('.') ? (stepStrVal.split('.')[1]?.length ?? 0) : 0;
+  const numSteps = Math.round((value + 1e-12) / step);
   return parseFloat((numSteps * step).toFixed(decimals));
+}
+
+/** Split position contract size into 50% TP1 and 50% TP2 halves respecting stepSize. */
+export function splitQuantity5050(
+  totalQty: number,
+  stepStr: string | number,
+): { sizeTP1: number; sizeTP2: number } {
+  if (!Number.isFinite(totalQty) || totalQty <= 0) {
+    return { sizeTP1: 0, sizeTP2: 0 };
+  }
+  const half = totalQty / 2;
+  const sizeTP1 = floorToStep(half, stepStr);
+  if (sizeTP1 <= 0) {
+    const full = floorToStep(totalQty, stepStr);
+    return { sizeTP1: full, sizeTP2: 0 };
+  }
+  const rawTP2 = totalQty - sizeTP1;
+  const sizeTP2 = floorToStep(rawTP2, stepStr);
+  return {
+    sizeTP1,
+    sizeTP2,
+  };
 }
 
 /**
  * Calculate contract order size for target Notional Position ($140.00 USD).
  * Formula: Required Contracts = Target Notional ($140) / Limit Entry Price
- * Respects minOrderSize and size_increment stepSize.
+ * Respects minOrderSize and stepSize / size_increment.
  */
 export async function toContractSize(
   symbol: string,
@@ -267,8 +301,7 @@ export async function toContractSize(
   const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
   const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
   
-  // If minOrderSize >= 1, the step size is minOrderSize (e.g. 10 or 100), otherwise use size_increment
-  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
+  const stepStr = getContractStepSize(contract);
 
   if (!limitPrice || limitPrice <= 0) return 0;
 
@@ -411,8 +444,15 @@ export async function placeLimitBuy(
   // Ensure 5x Isolated Leverage prior to order placement
   await setWeexLeverage(formattedSymbol, 5);
 
+  const contract = await getContract(formattedSymbol);
+  const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
+  const stepStr = getContractStepSize(contract);
+
   const formattedPrice = await toContractPrice(formattedSymbol, price);
-  const formattedSize = size;
+  let formattedSize = floorToStep(size, stepStr);
+  if (formattedSize < minOrderSize) {
+    formattedSize = minOrderSize;
+  }
   
   const formattedTp = presetTakeProfitPrice ? String(await toContractPrice(formattedSymbol, presetTakeProfitPrice)) : undefined;
   const formattedSl = presetStopLossPrice ? String(await toContractPrice(formattedSymbol, presetStopLossPrice)) : undefined;
@@ -479,8 +519,8 @@ export async function marketCloseLong(
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   const contract = await getContract(formattedSymbol);
-  const minOrderSize = Number(contract?.minOrderSize) || 1;
-  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
+  const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
+  const stepStr = getContractStepSize(contract);
 
   let formattedSize = floorToStep(size, stepStr);
   if (formattedSize < minOrderSize) {
@@ -554,8 +594,8 @@ export async function placePlanOrder(
   const formattedExecute = await toContractPrice(formattedSymbol, executePrice);
   
   const contract = await getContract(formattedSymbol);
-  const minOrderSize = Number(contract?.minOrderSize) || 1;
-  const stepStr = minOrderSize >= 1 ? String(minOrderSize) : (contract?.size_increment || "0.0001");
+  const minOrderSize = Number(contract?.minOrderSize) || 0.0001;
+  const stepStr = getContractStepSize(contract);
   
   let formattedSize = floorToStep(size, stepStr);
   if (formattedSize < minOrderSize) {

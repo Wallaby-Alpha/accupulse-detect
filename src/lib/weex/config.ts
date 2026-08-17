@@ -36,7 +36,19 @@ export const WEEX_CONFIG = {
   get STOP_OFFSET(): number {
     return parseEnvNum("STOP_OFFSET", -0.015);
   },
-  /** Take profit offset from the limit entry fill. */
+  /** Initial TP1 offset (+2.0%). */
+  get TP1_OFFSET(): number {
+    return parseEnvNum("TP1_OFFSET", 0.020);
+  },
+  /** Runner TP2 offset (+3.5% default, up to +5.0%). */
+  get TP2_OFFSET(): number {
+    return parseEnvNum("TP2_OFFSET", parseEnvNum("TARGET_OFFSET", 0.035));
+  },
+  /** Break-even stop loss trigger offset (+1.5% MFE). */
+  get BREAKEVEN_TRIGGER_OFFSET(): number {
+    return parseEnvNum("BREAKEVEN_TRIGGER_OFFSET", 0.015);
+  },
+  /** Take profit offset from the limit entry fill (legacy target alias). */
   get TARGET_OFFSET(): number {
     return parseEnvNum("TARGET_OFFSET", 0.035);
   },
@@ -59,21 +71,25 @@ export function toWeexSymbol(mexcSymbol: string): string {
 }
 
 /**
- * Fixed $140.00 Notional Position Sizing:
+ * Fixed $140.00 Notional Position Sizing & Split Target Architecture:
  * Target Notional Position Value = $140.00 USD
  * Contract Quantity = $140.00 / Limit Entry Price
  *
- * Risk at -1.5% Stop Loss = $140.00 * 0.015 = $2.10 USD
- * Gain at +3.5% Take Profit = $140.00 * 0.035 = $4.90 USD
+ * TP1 (+2.0%) = 50% Position Size
+ * TP2 (+3.5% to +5.0%) = 50% Runner Size
+ * Initial SL (-1.5%) = 100% Position Size
+ * Break-Even Trigger (+1.5% MFE) = Move SL to Entry Price
  */
 export function planPrices(alertPrice: number) {
   const notionalPositionUsd = WEEX_CONFIG.NOTIONAL_POSITION_USD; // $140.00 USD
   const entry = alertPrice * (1 + WEEX_CONFIG.ENTRY_OFFSET);
   const stop = entry * (1 + WEEX_CONFIG.STOP_OFFSET);
-  const target = entry * (1 + WEEX_CONFIG.TARGET_OFFSET);
+  const tp1 = entry * (1 + WEEX_CONFIG.TP1_OFFSET);
+  const tp2 = entry * (1 + WEEX_CONFIG.TP2_OFFSET);
+  const breakevenTrigger = entry * (1 + WEEX_CONFIG.BREAKEVEN_TRIGGER_OFFSET);
 
   // Contract Quantity = $140.00 / Limit Entry Price
   const quantity = notionalPositionUsd / entry;
 
-  return { entry, stop, target, quantity, notionalPositionUsd };
+  return { entry, stop, tp1, tp2, target: tp2, breakevenTrigger, quantity, notionalPositionUsd };
 }
