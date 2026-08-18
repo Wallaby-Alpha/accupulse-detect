@@ -15,6 +15,7 @@ import { isSymbolSupportedOnWeex, normalizeSymbol } from "./symbols.server";
 
 import { WEEX_CONFIG, planPrices, toWeexSymbol } from "./config";
 import { getTradingSettings } from "./settings.server";
+import { isInCooldown, recordTradeOutcome } from "./circuit-breaker.server";
 import {
   cancelAllOpenOrdersForSymbol,
   cancelOrder,
@@ -191,6 +192,14 @@ export async function registerSignal(
     const detail = `Symbol not supported on WEEX API`;
     await logEvent(null, symbol, "signal_skipped", detail);
     console.log(`[WEEX ENGINE] Skipped signal for ${symbol}: Symbol not supported on WEEX API`);
+    return;
+  }
+
+  // Circuit Breaker: consecutive-loss cooldown guard
+  const cooldown = await isInCooldown(targetSymbol);
+  if (cooldown.blocked) {
+    await logEvent(null, targetSymbol, "signal_skipped", cooldown.reason);
+    console.log(`[WEEX ENGINE] Signal blocked by circuit breaker: ${cooldown.reason}`);
     return;
   }
 
@@ -596,6 +605,14 @@ async function closeTradeWithPnl(
     reason,
     `Closed @ ${closePrice.toFixed(6)} · PnL $${pnl.toFixed(2)} (${reason})`,
   );
+
+  // Circuit breaker: record outcome to update consecutive-loss streak.
+  const isWin = reason === "take_profit" || pnl > 0;
+  try {
+    await recordTradeOutcome(trade.symbol, isWin);
+  } catch {
+    /* non-critical — don't block execution */
+  }
 }
 
 export async function checkTimeExits(
