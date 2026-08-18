@@ -84,6 +84,12 @@ function Index() {
             >
               ⚡ WEEX Trading Desk &amp; Performance Dashboard
             </Link>
+            <Link
+              to="/settings"
+              className="rounded-md bg-muted px-3.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:bg-muted/80"
+            >
+              ⚙️ Settings
+            </Link>
           </nav>
         </header>
 

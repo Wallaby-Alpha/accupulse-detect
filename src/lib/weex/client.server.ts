@@ -227,14 +227,30 @@ export async function getContract(symbol: string): Promise<Contract | null> {
   return contractCache?.map.get(symbol) ?? null;
 }
 
+export function parseDecimalPlaces(value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  const num = parseFloat(value);
+  if (Number.isInteger(num) && num >= 0 && num <= 15) {
+    if (num === 0) return "1";
+    return (Math.pow(10, -num)).toFixed(num);
+  }
+  return value;
+}
+
 export function getContractStepSize(contract: Contract | null): string {
   if (!contract) return "0.0001";
   if (contract.stepSize) return String(contract.stepSize);
+  if (contract.size_increment) return parseDecimalPlaces(contract.size_increment, "0.0001");
   const minOrderSize = Number(contract.minOrderSize);
-  if (Number.isFinite(minOrderSize) && minOrderSize >= 1) {
+  if (Number.isFinite(minOrderSize) && minOrderSize > 0) {
     return String(minOrderSize);
   }
-  if (contract.size_increment) return String(contract.size_increment);
+  return "0.0001";
+}
+
+export function getContractTickSize(contract: Contract | null): string {
+  if (!contract) return "0.0001";
+  if (contract.tick_size) return parseDecimalPlaces(contract.tick_size, "0.0001");
   return "0.0001";
 }
 
@@ -323,8 +339,7 @@ export async function toContractPrice(
   rawPrice: number,
 ): Promise<number> {
   const contract = await getContract(symbol);
-  if (!contract) return roundToStep(rawPrice, "0.0001");
-  const tickSizeStr = contract.tick_size || "0.0001";
+  const tickSizeStr = getContractTickSize(contract);
   return roundToStep(rawPrice, tickSizeStr);
 }
 
@@ -435,6 +450,8 @@ export async function marketBuyLong(
   symbol: string,
   size: number,
   clientOid?: string,
+  presetTakeProfitPrice?: number,
+  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -452,13 +469,20 @@ export async function marketBuyLong(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
+  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
+    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
+    : undefined;
+  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
+    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
+    : undefined;
+
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Executing Market Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
 
     const simBody: Record<string, unknown> = {
       symbol: simSymbol,
@@ -469,6 +493,8 @@ export async function marketBuyLong(
       quantity: String(formattedSize),
       newClientOrderId: clientOid || `sim-mkt-${Date.now()}`,
     };
+    if (formattedTp) simBody["presetTakeProfitPrice"] = String(formattedTp);
+    if (formattedSl) simBody["presetStopLossPrice"] = String(formattedSl);
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
@@ -496,6 +522,8 @@ export async function marketBuyLong(
     price: "0",
     marginMode: 3, // Isolated Margin Mode
   };
+  if (formattedTp) body["presetTakeProfitPrice"] = String(formattedTp);
+  if (formattedSl) body["presetStopLossPrice"] = String(formattedSl);
 
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body,
@@ -510,6 +538,8 @@ export async function placeLimitBuy(
   price: number,
   size: number,
   clientOid: string,
+  presetTakeProfitPrice?: number,
+  presetStopLossPrice?: number,
 ): Promise<string | null> {
   const formattedSymbol = toWeexSymbol(symbol);
   await setWeexLeverage(formattedSymbol, 5);
@@ -528,13 +558,20 @@ export async function placeLimitBuy(
     formattedSize = floorToStep(maxOrderSize, stepStr);
   }
 
+  const formattedTp = presetTakeProfitPrice && presetTakeProfitPrice > 0
+    ? await toContractPrice(formattedSymbol, presetTakeProfitPrice)
+    : undefined;
+  const formattedSl = presetStopLossPrice && presetStopLossPrice > 0
+    ? await toContractPrice(formattedSymbol, presetStopLossPrice)
+    : undefined;
+
   if (isDemoMode()) {
     const simSymbol = await toSimSymbol(symbol);
     const endpointPath = "/capi/v3/sim/order";
     const fullUrl = `https://api-contract.weex.com${endpointPath}`;
 
     console.log(`[WEEX PAPER TRADING] Placing Limit Buy Order at URL: ${fullUrl}`);
-    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}`);
+    console.log(`[WEEX PAPER TRADING] Symbol: ${simSymbol}, Price: ${formattedPrice}, Quantity: ${formattedSize}, TP: ${formattedTp}, SL: ${formattedSl}`);
 
     const simBody: Record<string, unknown> = {
       symbol: simSymbol,
@@ -547,6 +584,8 @@ export async function placeLimitBuy(
       timeInForce: "GTC",
       newClientOrderId: clientOid || `sim-${Date.now()}`,
     };
+    if (formattedTp) simBody["presetTakeProfitPrice"] = String(formattedTp);
+    if (formattedSl) simBody["presetStopLossPrice"] = String(formattedSl);
 
     try {
       const res = await weexRequest<PlaceOrderResponse>("POST", endpointPath, {
@@ -574,6 +613,8 @@ export async function placeLimitBuy(
     price: String(formattedPrice),
     marginMode: 3, // Isolated Margin Mode
   };
+  if (formattedTp) body["presetTakeProfitPrice"] = String(formattedTp);
+  if (formattedSl) body["presetStopLossPrice"] = String(formattedSl);
 
   const res = await weexRequest<PlaceOrderResponse>("POST", "/capi/v2/order/placeOrder", {
     body,

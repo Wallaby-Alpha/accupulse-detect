@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TradesRouteImport } from './routes/trades'
 import { Route as ApiPublicHooksScanRouteImport } from './routes/api/public/hooks/scan'
 import { Route as ApiPublicHooksSyncTradesRouteImport } from './routes/api/public/hooks/sync-trades'
@@ -18,6 +19,11 @@ import { Route as ApiPublicHooksTradeTickRouteImport } from './routes/api/public
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TradesRoute = TradesRouteImport.update({
@@ -44,6 +50,7 @@ const ApiPublicHooksTradeTickRoute = ApiPublicHooksTradeTickRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
@@ -51,6 +58,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
@@ -59,6 +67,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/trades': typeof TradesRoute
   '/api/public/hooks/scan': typeof ApiPublicHooksScanRoute
   '/api/public/hooks/sync-trades': typeof ApiPublicHooksSyncTradesRoute
@@ -68,6 +77,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/settings'
     | '/trades'
     | '/api/public/hooks/scan'
     | '/api/public/hooks/sync-trades'
@@ -75,6 +85,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/settings'
     | '/trades'
     | '/api/public/hooks/scan'
     | '/api/public/hooks/sync-trades'
@@ -82,6 +93,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/settings'
     | '/trades'
     | '/api/public/hooks/scan'
     | '/api/public/hooks/sync-trades'
@@ -90,6 +102,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SettingsRoute: typeof SettingsRoute
   TradesRoute: typeof TradesRoute
   ApiPublicHooksScanRoute: typeof ApiPublicHooksScanRoute
   ApiPublicHooksSyncTradesRoute: typeof ApiPublicHooksSyncTradesRoute
@@ -103,6 +116,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/trades': {
@@ -138,6 +158,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SettingsRoute: SettingsRoute,
   TradesRoute: TradesRoute,
   ApiPublicHooksScanRoute: ApiPublicHooksScanRoute,
   ApiPublicHooksSyncTradesRoute: ApiPublicHooksSyncTradesRoute,
