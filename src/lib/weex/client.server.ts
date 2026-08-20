@@ -227,14 +227,25 @@ export async function getContract(symbol: string): Promise<Contract | null> {
   return contractCache?.map.get(symbol) ?? null;
 }
 
+/**
+ * Convert a WEEX size_increment / tick_size field to a usable step string.
+ *
+ * WEEX encodes step sizes in two different formats depending on the contract:
+ *   - Decimal fraction:  "0.01", "0.001"  → returned as-is
+ *   - Integer step size: "10", "100"       → returned as-is (step of 10 or 100 lots)
+ *
+ * The old implementation treated integer values as a decimal-places count
+ * (e.g. "10" → 10^-10 ≈ 0.0000000001) which caused wildly wrong quantities
+ * for coins with large lot-size increments like MAUSDT (stepSize 10) or
+ * XLMUSDT (stepSize 100). This version returns the raw string unchanged.
+ */
 export function parseDecimalPlaces(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
-  const num = parseFloat(value);
-  if (Number.isInteger(num) && num >= 0 && num <= 15) {
-    if (num === 0) return "1";
-    return (Math.pow(10, -num)).toFixed(num);
-  }
-  return value;
+  const str = value.trim();
+  const num = parseFloat(str);
+  if (!Number.isFinite(num) || num <= 0) return fallback;
+  // Return the raw string — whether it is "0.01" or "10" or "100" it IS the step.
+  return str;
 }
 
 export function getContractStepSize(contract: Contract | null): string {
@@ -263,9 +274,20 @@ function getStepFromWeexFormat(format: string | undefined, defaultStep: number):
   return num;
 }
 
+/**
+ * Floor `value` down to the nearest whole multiple of `step`.
+ *
+ * Handles both fractional steps (0.001) and integer lot steps (10, 100).
+ * For integer steps, uses pure integer arithmetic to avoid floating-point
+ * drift (e.g. 304 with stepSize 10 → 300, not 300.0000000003).
+ */
 export function floorToStep(value: number, stepStr: string | number): number {
   const step = getStepFromWeexFormat(typeof stepStr === "number" ? String(stepStr) : stepStr, 0.0001);
   if (step <= 0 || !Number.isFinite(value) || value <= 0) return 0;
+  // Integer step path: pure Math.floor division avoids floating-point rounding issues.
+  if (Number.isInteger(step) && step >= 1) {
+    return Math.floor(value / step) * step;
+  }
   const stepStrVal = step.toString();
   const decimals = stepStrVal.includes('.') ? (stepStrVal.split('.')[1]?.length ?? 0) : 0;
   const numSteps = Math.floor((value + 1e-12) / step);
@@ -405,7 +427,13 @@ function handleDemoOrderFallback(
   return `sim-${orderType.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`;
 }
 
-/** Dynamically enforce 5x Isolated Leverage prior to order placement. */
+/**
+ * Dynamically enforce isolated leverage prior to order placement.
+ *
+ * Uses POST /capi/v2/account/setLeverage (the valid WEEX v2 endpoint).
+ * Falls back gracefully — a leverage error is warned but NEVER throws, so
+ * the order pipeline is not blocked by a 404 or permission error.
+ */
 export async function setWeexLeverage(symbol: string, leverage: number = 5): Promise<boolean> {
   if (isDemoMode()) {
     console.log(`[WEEX PAPER TRADING] Dynamic ${leverage}x Isolated Leverage set for ${symbol}`);
@@ -414,35 +442,25 @@ export async function setWeexLeverage(symbol: string, leverage: number = 5): Pro
 
   const formattedSymbol = symbol.startsWith("cmt_") ? symbol : toWeexSymbol(symbol);
 
-  const tryEndpoints = [
-    {
-      path: "/capi/v2/account/leverage",
+  try {
+    await weexRequest("POST", "/capi/v2/account/setLeverage", {
       body: {
         symbol: formattedSymbol,
-        longLeverage: String(leverage),
-        shortLeverage: String(leverage),
-        marginMode: 3,
+        leverage: String(leverage),
+        marginMode: "isolated",
       },
-    },
-    {
-      path: "/capi/v2/order/changeLeverage",
-      body: { symbol: formattedSymbol, leverage: String(leverage), marginMode: 3 },
-    },
-  ];
-
-  for (const ep of tryEndpoints) {
-    try {
-      await weexRequest("POST", ep.path, {
-        body: ep.body,
-        signed: true,
-      });
-      console.log(`[WEEX ENGINE] Dynamic ${leverage}x Isolated Leverage ENFORCED for ${formattedSymbol}`);
-    } catch (err) {
-      console.warn(`[WEEX ENGINE] Leverage endpoint ${ep.path} error: ${(err as Error).message}`);
-    }
+      signed: true,
+    });
+    console.log(`[WEEX ENGINE] ${leverage}x Isolated Leverage set for ${formattedSymbol}`);
+    return true;
+  } catch (err) {
+    // Non-fatal: log and continue with whatever leverage is currently set.
+    console.warn(
+      `[WEEX ENGINE] setLeverage warning for ${formattedSymbol}: ${(err as Error).message}. ` +
+      `Proceeding with existing leverage.`,
+    );
+    return false;
   }
-
-  return false;
 }
 
 /** Market buy to open a long position with mandatory native preset TP and SL attached directly to entry payload. */

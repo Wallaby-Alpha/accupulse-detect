@@ -177,6 +177,23 @@ async function mexcPrice(symbol: string): Promise<number | null> {
 }
 
 /**
+ * Asserts that a stop-loss price is strictly below entry price for a LONG position.
+ * Throws a descriptive error if the SL price is invalid (>= entry), preventing a
+ * stop-loss plan order that would immediately trigger or be rejected by WEEX.
+ */
+function assertValidSL(slPrice: number, entryPrice: number, context: string): void {
+  if (slPrice >= entryPrice) {
+    throw new Error(
+      `Invalid SL price ${slPrice.toPrecision(8)} >= entry ${entryPrice.toPrecision(8)} (${context}). ` +
+      `Check sl_percent sign or calculation.`,
+    );
+  }
+  if (slPrice <= 0) {
+    throw new Error(`Invalid SL price ${slPrice} <= 0 (${context}).`);
+  }
+}
+
+/**
  * Checks if an active position or pending order already exists for the target symbol.
  * Guards against both normal active statuses AND orphaned trades where an exchange order
  * was placed (entry_order_id IS NOT NULL) but not yet closed (closed_at IS NULL),
@@ -453,6 +470,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
 
   try {
     if (qty1 > 0) {
+      assertValidSL(sl1Price, fillPrice1, `T1 SL for ${trade.symbol}`);
       t1SlOrderId = await placePlanOrder(
         weexSymbol, sl1Price, sl1Price, qty1,
         `sl-t1-${trade.id.slice(0, 14)}`, "1",
@@ -807,7 +825,8 @@ async function handleFilled(trade: TradeRow): Promise<void> {
     if (isFilled(t2Detail)) {
       const fill2 = Number(t2Detail?.price_avg) || Number(trade.t2_limit_price);
       const qty2 = Number(trade.t2_quantity ?? 0);
-      const t2SlPrice = fill2 * (1 + WEEX_CONFIG.STOP_OFFSET);
+      // Explicit (1 - abs(offset)) formula guarantees SL is always below entry for LONGs.
+      const t2SlPrice = roundToStep(fill2 * (1 - Math.abs(WEEX_CONFIG.STOP_OFFSET)), getContractTickSize(contract));
       const t2Tp1Price = fill2 * (1 + WEEX_CONFIG.TP1_OFFSET);
       const t2Tp2Price = fill2 * (1 + WEEX_CONFIG.TP2_OFFSET);
 
@@ -825,6 +844,7 @@ async function handleFilled(trade: TradeRow): Promise<void> {
           t2Tp2Id = await placePlanOrder(weexSymbol, t2Tp2Price, t2Tp2Price, sizeTP2_t2, `tp2-t2-${trade.id.slice(0, 14)}`, "0");
         }
         if (qty2 > 0) {
+          assertValidSL(t2SlPrice, fill2, `T2 SL for ${trade.symbol}`);
           t2SlId = await placePlanOrder(weexSymbol, t2SlPrice, t2SlPrice, qty2, `sl-t2-${trade.id.slice(0, 14)}`, "1");
         }
       } catch (err) {
