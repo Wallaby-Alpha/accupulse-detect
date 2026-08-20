@@ -1,8 +1,9 @@
 /**
  * In-process 1-minute trade engine scheduler.
  * Automatically runs the WEEX trade engine tick every 60 seconds during local server execution.
+ * On startup, performs a one-time orphan recovery pass before the first engine tick.
  */
-import { runTradeEngine } from "./engine.server";
+import { recoverOrphanedTrades, runTradeEngine } from "./engine.server";
 
 let schedulerStarted = false;
 
@@ -12,8 +13,15 @@ export function initTradeEngineScheduler(): void {
 
   console.log("⚡ [WEEX Engine] Local 1-minute trade-tick scheduler initialized.");
 
-  // Run an initial tick shortly after startup (5s delay)
+  // Run orphan recovery + initial tick shortly after startup (5s delay)
   setTimeout(async () => {
+    try {
+      // Recover any orphaned trades (entry placed but status stuck at order_error)
+      // before the first normal engine tick processes active positions.
+      await recoverOrphanedTrades();
+    } catch (err) {
+      console.error("⚡ [WEEX Engine] Orphan recovery error:", err);
+    }
     try {
       const res = await runTradeEngine();
       console.log(

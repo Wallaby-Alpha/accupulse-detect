@@ -56,6 +56,8 @@ type TradeRow = {
   placed_at: string | null;
   filled_at: string | null;
   fill_price: number | null;
+  closed_at?: string | null;
+  // Extended columns (added via migration 20260820000000)
   t1_quantity?: number | null;
   t2_quantity?: number | null;
   t1_fill_price?: number | null;
@@ -65,6 +67,7 @@ type TradeRow = {
   t2_placed_at?: string | null;
   t2_filled?: boolean | null;
   t2_expired?: boolean | null;
+  t2_error?: string | null;
   tp1_price?: number | null;
   tp2_price?: number | null;
   tp1_filled?: boolean | null;
@@ -113,6 +116,25 @@ const SUPABASE_COLUMNS = new Set([
   "last_error",
   "created_at",
   "updated_at",
+  // Extended columns added in migration 20260820000000
+  "t1_quantity",
+  "t2_quantity",
+  "t1_fill_price",
+  "t2_limit_price",
+  "t2_fill_price",
+  "t2_order_id",
+  "t2_placed_at",
+  "t2_filled",
+  "t2_expired",
+  "t2_error",
+  "tp1_price",
+  "tp2_price",
+  "tp1_filled",
+  "tp1_order_id",
+  "tp2_order_id",
+  "sl_moved_to_be",
+  "high_water_price",
+  "remaining_quantity",
 ]);
 
 async function update(id: string, patch: Record<string, unknown>): Promise<void> {
@@ -154,26 +176,48 @@ async function mexcPrice(symbol: string): Promise<number | null> {
   }
 }
 
-/** Checks if an active position or pending order already exists for the target symbol. */
+/**
+ * Checks if an active position or pending order already exists for the target symbol.
+ * Guards against both normal active statuses AND orphaned trades where an exchange order
+ * was placed (entry_order_id IS NOT NULL) but not yet closed (closed_at IS NULL),
+ * even if status is unexpectedly set to 'order_error' due to a partial failure.
+ */
 export async function hasActiveTradeForSymbol(symbol: string): Promise<boolean> {
   const targetSymbol = normalizeSymbol(symbol);
   const activeStatuses = ["pending_velocity", "order_open", "filled"];
 
   // 1. Check Supabase database first (authoritative source)
   try {
-    const { data } = await supabaseAdmin
+    // Check standard active statuses
+    const { data: activeData } = await supabaseAdmin
       .from("weex_trades")
       .select("id")
       .eq("symbol", targetSymbol)
       .in("status", activeStatuses)
       .limit(1);
 
-    if (data && data.length > 0) return true;
+    if (activeData && activeData.length > 0) return true;
+
+    // Also block if there is any trade with a placed entry order that is not yet closed.
+    // This catches orphaned 'order_error' trades where Tranche 1 filled on the exchange
+    // but the engine set the status to error (e.g. PENDLE 229180db pattern).
+    const { data: orphanData } = await supabaseAdmin
+      .from("weex_trades")
+      .select("id")
+      .eq("symbol", targetSymbol)
+      .not("entry_order_id", "is", null)
+      .is("closed_at", null)
+      .limit(1);
+
+    if (orphanData && orphanData.length > 0) return true;
   } catch {
     // If Supabase fails, fall back to local store
     const localTrades = readLocalTrades();
     return localTrades.some(
-      (t) => normalizeSymbol(t.symbol) === targetSymbol && activeStatuses.includes(t.status),
+      (t) =>
+        normalizeSymbol(t.symbol) === targetSymbol &&
+        (activeStatuses.includes(t.status) ||
+          (t.entry_order_id != null && t.closed_at == null)),
     );
   }
 
@@ -302,7 +346,7 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     trade.id,
     trade.symbol,
     "velocity_pass",
-    `5m move ${velocityPct.toFixed(2)}% — knife check passed (> -1.5%). Executing 2 Independent Tranches ($70 Market + $70 Limit Pullback with Native Preset TP/SL).`,
+    `5m move ${velocityPct.toFixed(2)}% — knife check passed (> -1.5%). Executing 2 Independent Tranches ($70 Market + $70 Limit Pullback with post-fill Plan Order TP/SL).`,
   );
 
   if (!getWeexCredentials()) {
@@ -316,152 +360,218 @@ async function handlePendingVelocity(trade: TradeRow): Promise<void> {
     return;
   }
 
+  // ─── STEP A: Execute Tranche 1 Market Buy (no native presets — plan orders attached post-fill) ───
+
+  const contract = await getContract(weexSymbol);
+  const stepStr = getContractStepSize(contract);
+  const tickStr = getContractTickSize(contract);
+  const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
+
+  let qty1 = floorToStep((settings.notional_size_usd / 2) / price_5m, stepStr);
+  if (qty1 > maxOrderSize) qty1 = floorToStep(maxOrderSize, stepStr);
+
+  if (qty1 <= 0) {
+    await update(trade.id, {
+      status: "discarded",
+      velocity_pct: velocityPct,
+      closed_at: new Date().toISOString(),
+      close_reason: "invalid_contract_size",
+      last_error: "Invalid calculated contract size for Tranche 1",
+    });
+    await logEvent(trade.id, trade.symbol, "size_rejected", "Invalid contract size for Tranche 1 — signal discarded");
+    return;
+  }
+
+  let mktOrderId: string | null = null;
   try {
-    const contract = await getContract(weexSymbol);
-    const stepStr = getContractStepSize(contract);
-    const tickStr = getContractTickSize(contract);
-    const maxOrderSize = Number(contract?.maxOrderSize) || Infinity;
-
-    // --- TRADE 1: TRANCHE 1 (Immediate Market Buy) ---
-    let qty1 = floorToStep((settings.notional_size_usd / 2) / price_5m, stepStr);
-    if (qty1 > maxOrderSize) {
-      qty1 = floorToStep(maxOrderSize, stepStr);
-    }
-
-    if (qty1 <= 0) {
-      await update(trade.id, {
-        status: "discarded",
-        velocity_pct: velocityPct,
-        closed_at: new Date().toISOString(),
-        close_reason: "invalid_contract_size",
-        last_error: "Invalid calculated contract size for Tranche 1",
-      });
-      await logEvent(
-        trade.id,
-        trade.symbol,
-        "size_rejected",
-        "Invalid contract size for Tranche 1 — signal discarded",
-      );
-      return;
-    }
-
-    const tp1 = roundToStep(price_5m * (1 + (settings.tp_percent / 100)), tickStr);
-    const sl1 = roundToStep(price_5m * (1 + -(settings.sl_percent / 100)), tickStr);
-
-    const mktOrderId = await marketBuyLong(
+    // No presetTakeProfitPrice / presetStopLossPrice — plan orders placed post-fill below.
+    mktOrderId = await marketBuyLong(
       weexSymbol,
       qty1,
       `t1-${trade.id.slice(0, 18)}`,
-      tp1,
-      sl1,
     );
+  } catch (error) {
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const codeStr = error instanceof WeexError ? String(error.code ?? "") : "";
+    let cleanDetail = rawMsg;
+    if (codeStr === "-1058" || codeStr === "1058" || rawMsg.includes("-1058") || rawMsg.includes("1058")) {
+      cleanDetail = "Symbol not supported via WEEX API (-1058)";
+    } else if (
+      codeStr === "-1056" || codeStr === "40018" || codeStr === "-40018" ||
+      rawMsg.includes("-1056") || rawMsg.includes("40018") || rawMsg.includes("Invalid IP")
+    ) {
+      cleanDetail = "Invalid IP address for WEEX API Key (40018 / -1056). Please whitelist your IP on WEEX.";
+    }
+    await update(trade.id, { status: "order_error", velocity_pct: velocityPct, last_error: cleanDetail });
+    await logEvent(trade.id, trade.symbol, "order_error", cleanDetail);
+    console.error(`[WEEX ENGINE] Tranche 1 order error for ${trade.symbol}: ${cleanDetail}`);
+    return;
+  }
 
-    const fillPrice1 = (await getTicker(weexSymbol)) ?? price_5m;
-    const now = new Date().toISOString();
+  // ─── STEP B: Tranche 1 filled — immediately persist 'filled' status ───
+
+  const fillPrice1 = (await getTicker(weexSymbol)) ?? price_5m;
+  const now = new Date().toISOString();
+
+  // Bracket prices calculated from actual fill price
+  const sl1Price  = roundToStep(fillPrice1 * (1 - (settings.sl_percent / 100)), tickStr);
+  const tp1Price  = roundToStep(fillPrice1 * (1 + WEEX_CONFIG.TP1_OFFSET), tickStr);
+  const tp2Price  = roundToStep(fillPrice1 * (1 + WEEX_CONFIG.TP2_OFFSET), tickStr);
+  const { sizeTP1: t1SizeTP1 } = splitQuantity5050(qty1, stepStr);
+
+  await update(trade.id, {
+    status: "filled",
+    velocity_pct: velocityPct,
+    entry_price: fillPrice1,
+    fill_price: fillPrice1,
+    t1_fill_price: fillPrice1,
+    stop_price: sl1Price,
+    target_price: tp2Price,   // target_price = final runner target (TP2)
+    tp1_price: tp1Price,
+    tp2_price: tp2Price,
+    quantity: qty1,
+    t1_quantity: qty1,
+    entry_order_id: mktOrderId,
+    placed_at: now,
+    filled_at: now,
+    remaining_quantity: qty1,
+    last_error: null,
+  });
+
+  await logEvent(
+    trade.id,
+    trade.symbol,
+    "tranche1_filled",
+    `Tranche 1 Market Buy filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)}. Attaching SL (-${settings.sl_percent}%) and TP1 (+${WEEX_CONFIG.TP1_OFFSET * 100}%) plan orders.`,
+  );
+
+  // ─── STEP B continued: Attach Tranche 1 bracket plan orders immediately post-fill ───
+  // SL covers full T1 quantity; TP1 covers 50% (the other 50% is the runner monitored in handleFilled).
+
+  let t1SlOrderId: string | null = null;
+  let t1Tp1OrderId: string | null = null;
+
+  try {
+    if (qty1 > 0) {
+      t1SlOrderId = await placePlanOrder(
+        weexSymbol, sl1Price, sl1Price, qty1,
+        `sl-t1-${trade.id.slice(0, 14)}`, "1",
+      );
+    }
+    if (t1SizeTP1 > 0) {
+      t1Tp1OrderId = await placePlanOrder(
+        weexSymbol, tp1Price, tp1Price, t1SizeTP1,
+        `tp1-t1-${trade.id.slice(0, 14)}`, "0",
+      );
+    }
 
     await update(trade.id, {
-      status: "filled",
-      velocity_pct: velocityPct,
-      entry_price: fillPrice1,
-      fill_price: fillPrice1,
-      stop_price: sl1,
-      target_price: tp1,
-      quantity: qty1,
-      entry_order_id: mktOrderId,
-      placed_at: now,
-      filled_at: now,
-      remaining_quantity: qty1,
-      last_error: null,
+      sl_order_id: t1SlOrderId,
+      tp1_order_id: t1Tp1OrderId,
     });
 
     await logEvent(
       trade.id,
       trade.symbol,
-      "tranche1_filled",
-      `Trade 1 Market Buy filled ${qty1} contracts @ ${fillPrice1.toPrecision(6)}. Native TP and SL attached.`,
+      "tranche1_brackets_placed",
+      `SL plan order ${t1SlOrderId ?? "(none)"} @ ${sl1Price.toPrecision(6)} · TP1 plan order ${t1Tp1OrderId ?? "(none)"} @ ${tp1Price.toPrecision(6)} for ${t1SizeTP1} contracts.`,
+    );
+  } catch (bracketErr) {
+    const bracketMsg = bracketErr instanceof Error ? bracketErr.message : String(bracketErr);
+    console.warn(`[WEEX ENGINE] Tranche 1 bracket order error for ${trade.symbol}: ${bracketMsg}`);
+    await logEvent(
+      trade.id,
+      trade.symbol,
+      "tranche1_bracket_error",
+      `Warning: Failed to place Tranche 1 bracket plan orders (${bracketMsg}). Trade is filled but unprotected — engine will monitor via software SL.`,
+    );
+    await update(trade.id, { last_error: `Bracket placement failed: ${bracketMsg}` });
+    // Do NOT change status — the trade IS filled and must continue to be monitored.
+  }
+
+  // ─── STEP C: Tranche 2 Pullback Limit Buy — fully isolated, never affects T1 status ───
+
+  const limitPrice2 = roundToStep(price_5m * (1 - (settings.pullback_percent / 100)), tickStr);
+  let qty2 = floorToStep((settings.notional_size_usd / 2) / limitPrice2, stepStr);
+  if (qty2 > maxOrderSize) qty2 = floorToStep(maxOrderSize, stepStr);
+
+  if (qty2 <= 0) {
+    await logEvent(trade.id, trade.symbol, "tranche2_skipped", "Tranche 2 qty calculated as 0 — skipped.");
+    return;
+  }
+
+  const tradeId2 = crypto.randomUUID() as `${string}-${string}-${string}-${string}-${string}`;
+
+  try {
+    await supabaseAdmin.from("weex_trades").insert({
+      id: tradeId2,
+      symbol: trade.symbol,
+      alert_price: trade.alert_price,
+      status: "order_open",
+      alerted_at: now,
+      created_at: now,
+    });
+  } catch { /* non-fatal — local store fallback below */ }
+
+  try {
+    // No native presets — plan orders will be placed in handleFilled when T2 fills.
+    const limitOrderId2 = await placeLimitBuy(
+      weexSymbol,
+      limitPrice2,
+      qty2,
+      `t2-${tradeId2.slice(0, 18)}`,
     );
 
-    // --- TRADE 2: TRANCHE 2 (Pullback Limit Buy) ---
-    const limitPrice2 = roundToStep(price_5m * (1 + -(settings.pullback_percent / 100)), tickStr);
-    let qty2 = floorToStep((settings.notional_size_usd / 2) / limitPrice2, stepStr);
-    if (qty2 > maxOrderSize) {
-      qty2 = floorToStep(maxOrderSize, stepStr);
-    }
+    const sl2Price = roundToStep(limitPrice2 * (1 - (settings.sl_percent / 100)), tickStr);
+    const tp1_2Price = roundToStep(limitPrice2 * (1 + WEEX_CONFIG.TP1_OFFSET), tickStr);
+    const tp2_2Price = roundToStep(limitPrice2 * (1 + WEEX_CONFIG.TP2_OFFSET), tickStr);
 
-    if (qty2 > 0) {
-      const tp2 = roundToStep(limitPrice2 * (1 + (settings.tp_percent / 100)), tickStr);
-      const sl2 = roundToStep(limitPrice2 * (1 + -(settings.sl_percent / 100)), tickStr);
-
-      const tradeId2 = crypto.randomUUID() as `${string}-${string}-${string}-${string}-${string}`;
-
-      try {
-        await supabaseAdmin.from("weex_trades").insert({
-          id: tradeId2,
-          symbol: trade.symbol,
-          alert_price: trade.alert_price,
-          status: "pending_velocity",
-          alerted_at: now,
-          created_at: now,
-        });
-      } catch {}
-
-      const limitOrderId2 = await placeLimitBuy(
-        weexSymbol,
-        limitPrice2,
-        qty2,
-        `t2-${tradeId2.slice(0, 18)}`,
-        tp2,
-        sl2,
-      );
-
-      await update(tradeId2, {
-        symbol: trade.symbol,
-        alert_price: trade.alert_price,
-        status: "order_open",
-        velocity_pct: velocityPct,
-        entry_price: limitPrice2,
-        stop_price: sl2,
-        target_price: tp2,
-        quantity: qty2,
-        entry_order_id: limitOrderId2,
-        placed_at: now,
-        remaining_quantity: qty2,
-        last_error: null,
-      });
-
-      await logEvent(
-        tradeId2,
-        trade.symbol,
-        "tranche2_submitted",
-        `Trade 2 Limit Buy placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)}. Native TP and SL attached.`,
-      );
-    }
-
-  } catch (error) {
-    const rawMsg = error instanceof Error ? error.message : String(error);
-    const codeStr = error instanceof WeexError ? String(error.code ?? "") : "";
-
-    let cleanDetail = rawMsg;
-    if (codeStr === "-1058" || codeStr === "1058" || rawMsg.includes("-1058") || rawMsg.includes("1058")) {
-      cleanDetail = "Symbol not supported via WEEX API (-1058)";
-    } else if (
-      codeStr === "-1056" ||
-      codeStr === "40018" ||
-      codeStr === "-40018" ||
-      rawMsg.includes("-1056") ||
-      rawMsg.includes("40018") ||
-      rawMsg.includes("Invalid IP")
-    ) {
-      cleanDetail = "Invalid IP address for WEEX API Key (40018 / -1056). Please whitelist your IP on WEEX.";
-    }
-
-    await update(trade.id, {
-      status: "order_error",
+    await update(tradeId2, {
+      symbol: trade.symbol,
+      alert_price: trade.alert_price,
+      status: "order_open",
       velocity_pct: velocityPct,
-      last_error: cleanDetail,
+      entry_price: limitPrice2,
+      t2_limit_price: limitPrice2,
+      stop_price: sl2Price,
+      target_price: tp2_2Price,
+      tp1_price: tp1_2Price,
+      tp2_price: tp2_2Price,
+      quantity: qty2,
+      t2_quantity: qty2,
+      entry_order_id: limitOrderId2,
+      placed_at: now,
+      remaining_quantity: qty2,
+      last_error: null,
     });
-    await logEvent(trade.id, trade.symbol, "order_error", cleanDetail);
-    console.error(`[WEEX ENGINE] Order error for ${trade.symbol}: ${cleanDetail}`);
+
+    await logEvent(
+      tradeId2,
+      trade.symbol,
+      "tranche2_submitted",
+      `Tranche 2 Limit Buy placed for ${qty2} contracts @ ${limitPrice2.toPrecision(6)}. Plan orders will be attached on fill.`,
+    );
+  } catch (t2Error) {
+    // Tranche 2 failed — log it and gracefully abandon the T2 record.
+    // Parent trade remains 'filled' and will continue normal engine monitoring.
+    const t2Msg = t2Error instanceof Error ? t2Error.message : String(t2Error);
+    console.warn(`[WEEX ENGINE] Tranche 2 failed for ${trade.symbol}: ${t2Msg}. Tranche 1 continues normally.`);
+    await logEvent(
+      trade.id,
+      trade.symbol,
+      "tranche2_failed",
+      `Could not place Tranche 2 limit buy (${t2Msg}). Continuing with Tranche 1 only — parent trade unaffected.`,
+    );
+    // Mark the T2 row as expired so it won't be polled
+    try {
+      await (supabaseAdmin.from("weex_trades") as any).update({
+        status: "expired",
+        closed_at: now,
+        close_reason: "t2_placement_failed",
+        t2_error: t2Msg,
+        updated_at: now,
+      }).eq("id", tradeId2);
+    } catch { /* ignore cleanup error */ }
   }
 }
 
@@ -907,11 +1017,10 @@ export async function runTradeEngine(): Promise<{
   processed: number;
   errors: number;
 }> {
+  // Fetch ALL columns so handleFilled has full state (tp1_filled, sl_moved_to_be, etc.)
   const { data, error } = await supabaseAdmin
     .from("weex_trades")
-    .select(
-      "id,symbol,alert_price,alerted_at,status,entry_price,stop_price,target_price,quantity,entry_order_id,tp_order_id,sl_order_id,placed_at,filled_at,fill_price",
-    )
+    .select("*")
     .in("status", ["pending_velocity", "order_open", "filled"])
     .order("alerted_at", { ascending: true })
     .limit(50);
@@ -944,4 +1053,99 @@ export async function runTradeEngine(): Promise<{
   }
 
   return { processed: data?.length ?? 0, errors };
+}
+
+/**
+ * Startup orphan recovery: scans for trades where an entry order was placed on WEEX
+ * but the engine set status to 'order_error' (e.g. PENDLE bug: T2 margin failure).
+ * If the exchange position is still open, recovers to 'filled'. If already closed,
+ * marks the record CLOSED. Should be called once at engine startup before the first tick.
+ */
+export async function recoverOrphanedTrades(): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("weex_trades")
+    .select("*")
+    .eq("status", "order_error")
+    .not("entry_order_id", "is", null)
+    .is("closed_at", null)
+    .limit(20);
+
+  if (error || !data || data.length === 0) return;
+
+  console.log(`[WEEX ENGINE] Orphan recovery: found ${data.length} orphaned trade(s) to inspect.`);
+
+  for (const row of data as TradeRow[]) {
+    const weexSymbol = toWeexSymbol(row.symbol);
+    try {
+      // Use ticker as a proxy for whether we can communicate with the exchange.
+      // Attempt to place an emergency SL if ticker is reachable.
+      const ticker = await getTicker(weexSymbol);
+      const fill = Number(row.fill_price ?? row.entry_price ?? 0);
+      const qty = Number(row.quantity ?? 0);
+
+      if (fill <= 0 || qty <= 0) {
+        // No fill info — we can't recover; close record cleanly.
+        await update(row.id, {
+          status: "CLOSED",
+          closed_at: new Date().toISOString(),
+          close_reason: "orphan_no_fill_data",
+        });
+        await logEvent(row.id, row.symbol, "orphan_closed", "Orphaned order_error with no fill data — marked CLOSED.");
+        continue;
+      }
+
+      // Attempt to place an emergency SL plan order at the original stop price.
+      const contract = await getContract(weexSymbol);
+      const stepStr = getContractStepSize(contract);
+      const tickStr = getContractTickSize(contract);
+      const emergencySlPrice = Number(row.stop_price ?? 0) > 0
+        ? Number(row.stop_price)
+        : roundToStep(fill * (1 + WEEX_CONFIG.STOP_OFFSET), tickStr);
+
+      let emergencySlId: string | null = null;
+      try {
+        const recoveredQty = floorToStep(qty, stepStr);
+        if (recoveredQty > 0) {
+          emergencySlId = await placePlanOrder(
+            weexSymbol, emergencySlPrice, emergencySlPrice, recoveredQty,
+            `emer-sl-${row.id.slice(0, 14)}`, "1",
+          );
+        }
+      } catch (slErr) {
+        // Position may already be closed on exchange — this is fine, we'll still mark recovered.
+        const slMsg = slErr instanceof Error ? slErr.message : String(slErr);
+        console.warn(`[WEEX ENGINE] Orphan SL placement failed for ${row.symbol}: ${slMsg}`);
+        if (isPositionAlreadyClosedError(slErr)) {
+          // Exchange says position is already gone — close the record.
+          await update(row.id, {
+            status: "CLOSED",
+            closed_at: new Date().toISOString(),
+            close_reason: "orphan_already_closed_on_exchange",
+            close_price: ticker ?? fill,
+            last_error: slMsg,
+          });
+          await logEvent(row.id, row.symbol, "orphan_closed",
+            `Orphaned trade confirmed closed on exchange (40015). Marked CLOSED @ ${(ticker ?? fill).toPrecision(6)}.`);
+          continue;
+        }
+      }
+
+      // Recover the trade to 'filled' — engine will now monitor it each tick.
+      await update(row.id, {
+        status: "filled",
+        sl_order_id: emergencySlId ?? row.sl_order_id,
+        filled_at: row.filled_at ?? new Date().toISOString(),
+        last_error: null,
+      });
+
+      await logEvent(row.id, row.symbol, "orphan_recovered",
+        `Orphaned order_error trade recovered to 'filled'. Emergency SL ${emergencySlId ?? "(none)"} @ ${emergencySlPrice.toPrecision(6)}. Engine monitoring resumed.`);
+
+      console.log(`[WEEX ENGINE] Orphan recovered: ${row.symbol} (${row.id.slice(0, 8)}) → status=filled, emergency SL=${emergencySlId ?? "none"}.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[WEEX ENGINE] Orphan recovery failed for ${row.symbol}: ${msg}`);
+      await logEvent(row.id, row.symbol, "orphan_recovery_error", msg);
+    }
+  }
 }

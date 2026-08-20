@@ -2,7 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 
 async function handle() {
   try {
-    const { runTradeEngine } = await import("@/lib/weex/engine.server");
+    const { recoverOrphanedTrades, runTradeEngine } = await import("@/lib/weex/engine.server");
+    // Recover any orphaned trades before the normal tick
+    await recoverOrphanedTrades().catch((err: unknown) => {
+      console.error("Orphan recovery error:", err instanceof Error ? err.message : String(err));
+    });
     const result = await runTradeEngine();
     return Response.json({ ok: true, ...result });
   } catch (error) {
