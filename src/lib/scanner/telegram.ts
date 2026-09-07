@@ -10,25 +10,27 @@ function fmtPrice(value: number): string {
 
 export function formatAlert(r: ScoreResult): string {
   const price = r.currentPrice;
-  const limitEntry = price * 0.975;
-  const target = limitEntry * 1.035;
-  const stop = limitEntry * 0.985;
+  const limitEntry = price * 0.997; // -0.3% limit entry
+  const tp1 = limitEntry * 1.035;    // +3.5% TP1 (close 50% & move SL to BE)
+  const tp2 = limitEntry * 1.060;    // +6.0% TP2 (close remaining 50%)
+  const stop = limitEntry * 0.965;   // -3.5% Calibrated Hard Stop Loss
 
   return [
-    "🎯 STAGE 1 ACCUMULATION SIGNAL",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "🚨 STAGE 1 ACCUMULATION SIGNAL (OPTIMIZED)",
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
     `Symbol: #${r.symbol}`,
     `Alert Price: $${fmtPrice(price)}`,
-    `Score: ${r.finalScore.toFixed(2)} (Stage 1)`,
-    "━━━━━━━━━━━━━━━━━━━━━━━━━",
+    `Score: ${r.finalScore.toFixed(2)} | Phase: ${r.stage}`,
+    `Vol Ramp: ${(r.components?.volumeAcceleration ?? 1.0).toFixed(2)}x`,
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
     "",
-    "⚡ MECHANICAL EXECUTION PLAN:",
-    "├─ Entry Strategy: Wait 5m for candle close. Skip if 5m drop <= -1.5%",
-    `├─ Limit Buy Entry: $${fmtPrice(limitEntry)} (-2.5% below Alert Price)`,
-    `├─ Take Profit: $${fmtPrice(target)} (+3.5% above fill / +1.0% from Alert)`,
-    `├─ Stop Loss: $${fmtPrice(stop)} (-1.5% below fill / -4.0% from Alert)`,
-    "├─ Time Exit: Market Close position at t = 60m post-entry",
-    "└─ Order Expiration: Cancel limit buy if unfilled after 2 hours",
+    "🎯 CALIBRATED EXECUTION PLAN:",
+    `• Entry: $${fmtPrice(limitEntry)} (-0.3% Limit)`,
+    `• Stop Loss: $${fmtPrice(stop)} (-3.5% Hard Stop Loss)`,
+    `• TP1: $${fmtPrice(tp1)} (+3.5% | Close 50% & Move SL to Breakeven)`,
+    `• TP2: $${fmtPrice(tp2)} (+6.0% | Close Remaining 50%)`,
+    `• Breakeven Trigger: Move SL to entry at +3.0% gain`,
+    `• Stagnation Exit: Close if < +1.5% after 180 min (3h)`,
   ].join("\n");
 }
 

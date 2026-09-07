@@ -57,3 +57,44 @@ export function rollingMean(values: number[], period: number): number[] {
     i + 1 < period ? NaN : mean(values.slice(i - period + 1, i + 1)),
   );
 }
+
+export function rsi(values: number[], period: number): number[] {
+  if (values.length <= period) return values.map(() => 50);
+  const out: number[] = Array(period).fill(50);
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = values[i]! - values[i - 1]!;
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  
+  if (avgLoss === 0) out.push(100);
+  else out.push(100 - (100 / (1 + (avgGain / avgLoss))));
+  
+  for (let i = period + 1; i < values.length; i++) {
+    const diff = values[i]! - values[i - 1]!;
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    if (avgLoss === 0) out.push(100);
+    else out.push(100 - (100 / (1 + (avgGain / avgLoss))));
+  }
+  return out;
+}
+
+export function atr(k: Kline[], period: number): number[] {
+  const tr = trueRange(k);
+  if (tr.length <= period) return tr;
+  const out: number[] = Array(period - 1).fill(NaN);
+  let prev = mean(tr.slice(0, period));
+  out.push(prev);
+  for (let i = period; i < tr.length; i++) {
+    prev = (prev * (period - 1) + tr[i]!) / period;
+    out.push(prev);
+  }
+  return out;
+}

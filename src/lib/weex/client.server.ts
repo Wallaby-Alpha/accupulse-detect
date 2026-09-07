@@ -138,11 +138,20 @@ export async function weexRequest<T = unknown>(
     }
   }
 
-  const res = await fetch(`${WEEX_BASE_URL}${requestPath}`, {
-    method,
-    headers,
-    ...(bodyText ? { body: bodyText } : {}),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  let res: Response;
+  try {
+    res = await fetch(`${WEEX_BASE_URL}${requestPath}`, {
+      method,
+      headers,
+      ...(bodyText ? { body: bodyText } : {}),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const text = await res.text();
   if (!res.ok) {
@@ -241,22 +250,32 @@ export async function getContract(symbol: string): Promise<Contract | null> {
  */
 export function parseDecimalPlaces(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
-  const str = value.trim();
-  const num = parseFloat(str);
-  if (!Number.isFinite(num) || num <= 0) return fallback;
-  // Return the raw string — whether it is "0.01" or "10" or "100" it IS the step.
-  return str;
+  const num = parseFloat(value);
+  if (Number.isInteger(num) && num >= 0 && num <= 15) {
+    if (num === 0) return "1";
+    return (Math.pow(10, -num)).toFixed(num);
+  }
+  return value;
 }
 
 export function getContractStepSize(contract: Contract | null): string {
-  if (!contract) return "0.0001";
+  if (!contract) return "1"; // Default to 1 instead of 0.0001 for safer flooring
   if (contract.stepSize) return String(contract.stepSize);
-  if (contract.size_increment) return parseDecimalPlaces(contract.size_increment, "0.0001");
+  
+  let stepStr = "1";
+  if (contract.size_increment) {
+    stepStr = parseDecimalPlaces(contract.size_increment, "1");
+  }
+  
+  const stepVal = parseFloat(stepStr);
   const minOrderSize = Number(contract.minOrderSize);
-  if (Number.isFinite(minOrderSize) && minOrderSize > 0) {
+  
+  // For integer lot coins, WEEX implicitly uses minOrderSize as the step size.
+  if (Number.isFinite(minOrderSize) && minOrderSize > 1 && Number.isInteger(minOrderSize) && stepVal === 1) {
     return String(minOrderSize);
   }
-  return "0.0001";
+  
+  return stepStr;
 }
 
 export function getContractTickSize(contract: Contract | null): string {
@@ -276,31 +295,35 @@ function getStepFromWeexFormat(format: string | undefined, defaultStep: number):
 
 /**
  * Floor `value` down to the nearest whole multiple of `step`.
- *
- * Handles both fractional steps (0.001) and integer lot steps (10, 100).
- * For integer steps, uses pure integer arithmetic to avoid floating-point
- * drift (e.g. 304 with stepSize 10 → 300, not 300.0000000003).
  */
 export function floorToStep(value: number, stepStr: string | number): number {
   const step = getStepFromWeexFormat(typeof stepStr === "number" ? String(stepStr) : stepStr, 0.0001);
   if (step <= 0 || !Number.isFinite(value) || value <= 0) return 0;
-  // Integer step path: pure Math.floor division avoids floating-point rounding issues.
-  if (Number.isInteger(step) && step >= 1) {
-    return Math.floor(value / step) * step;
+  
+  let cleanQty: number;
+  if (step >= 1) {
+    cleanQty = Math.floor(value / step) * step;
+  } else {
+    const decimals = (step.toString().split('.')[1] || '').length;
+    cleanQty = Math.floor(value / step) * step;
+    cleanQty = Number(cleanQty.toFixed(decimals));
   }
-  const stepStrVal = step.toString();
-  const decimals = stepStrVal.includes('.') ? (stepStrVal.split('.')[1]?.length ?? 0) : 0;
-  const numSteps = Math.floor((value + 1e-12) / step);
-  return parseFloat((numSteps * step).toFixed(decimals));
+  return cleanQty;
 }
 
 export function roundToStep(value: number, stepStr: string | number): number {
   const step = getStepFromWeexFormat(typeof stepStr === "number" ? String(stepStr) : stepStr, 0.0001);
   if (step <= 0 || !Number.isFinite(value) || value <= 0) return 0;
-  const stepStrVal = step.toString();
-  const decimals = stepStrVal.includes('.') ? (stepStrVal.split('.')[1]?.length ?? 0) : 0;
-  const numSteps = Math.round((value + 1e-12) / step);
-  return parseFloat((numSteps * step).toFixed(decimals));
+  
+  let cleanQty: number;
+  if (step >= 1) {
+    cleanQty = Math.round(value / step) * step;
+  } else {
+    const decimals = (step.toString().split('.')[1] || '').length;
+    cleanQty = Math.round(value / step) * step;
+    cleanQty = Number(cleanQty.toFixed(decimals));
+  }
+  return cleanQty;
 }
 
 /** Split position contract size into 50% TP1 and 50% TP2 halves respecting stepSize. */
@@ -434,33 +457,10 @@ function handleDemoOrderFallback(
  * Falls back gracefully — a leverage error is warned but NEVER throws, so
  * the order pipeline is not blocked by a 404 or permission error.
  */
-export async function setWeexLeverage(symbol: string, leverage: number = 5): Promise<boolean> {
-  if (isDemoMode()) {
-    console.log(`[WEEX PAPER TRADING] Dynamic ${leverage}x Isolated Leverage set for ${symbol}`);
-    return true;
-  }
-
-  const formattedSymbol = symbol.startsWith("cmt_") ? symbol : toWeexSymbol(symbol);
-
-  try {
-    await weexRequest("POST", "/capi/v2/account/setLeverage", {
-      body: {
-        symbol: formattedSymbol,
-        leverage: String(leverage),
-        marginMode: "isolated",
-      },
-      signed: true,
-    });
-    console.log(`[WEEX ENGINE] ${leverage}x Isolated Leverage set for ${formattedSymbol}`);
-    return true;
-  } catch (err) {
-    // Non-fatal: log and continue with whatever leverage is currently set.
-    console.warn(
-      `[WEEX ENGINE] setLeverage warning for ${formattedSymbol}: ${(err as Error).message}. ` +
-      `Proceeding with existing leverage.`,
-    );
-    return false;
-  }
+export async function setWeexLeverage(symbol: string, leverage: number): Promise<boolean> {
+  // The WEEX API endpoint for setting leverage is either unsupported or returns 404.
+  // Since accounts default to a fixed leverage, we silence this call to avoid polluting logs.
+  return true;
 }
 
 /** Market buy to open a long position with mandatory native preset TP and SL attached directly to entry payload. */

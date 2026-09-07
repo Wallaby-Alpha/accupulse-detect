@@ -1,6 +1,7 @@
 import { SCANNER_CONFIG, type ScannerConfig } from "./config";
 import type { Depth, Kline, Ticker } from "./mexc";
 import {
+  atr,
   clip,
   closes,
   ema,
@@ -9,11 +10,19 @@ import {
   lows,
   mean,
   rollingMean,
+  rsi,
   sma,
   stdev,
   trueRange,
   volumes,
 } from "./indicators";
+
+const BLACKLIST = new Set([
+  "SN85/USDT", "SN64/USDT", "BOSON/USDT", "EUR/USDT", "NOS/USDT",
+  "ALEO/USDT", "TLOS/USDT", "XMR/USDT", "EIGEN/USDT", "FAR/USDT",
+  "TTMION/USDT", "ROAM/USDT", "NOCON/USDT", "NAVX/USDT", "INODON/USDT",
+  "NEMON/USDT", "FON/USDT", "GOATED/USDT"
+].map(s => s.replace("/", "")));
 
 export type SymbolData = {
   ticker: Ticker;
@@ -54,7 +63,7 @@ export function checkHardGates(
   config: ScannerConfig = SCANNER_CONFIG,
 ): { pass: boolean; reason: string } {
   const g = config.GATES;
-  const k = data.klines1h;
+  const k = data.klines1h; // in 5m mode, this holds 5m klines
 
   if (k.length < g.MIN_LOOKBACK_CANDLES) return { pass: false, reason: "insufficient_history" };
 
@@ -69,21 +78,21 @@ export function checkHardGates(
   const spreadBps = ((ask - bid) / bid) * 10000;
   if (spreadBps > g.MAX_SPREAD_BPS)
     return { pass: false, reason: `spread_too_wide_${spreadBps.toFixed(0)}bps` };
+    
+  if (BLACKLIST.has(data.ticker.symbol)) {
+    return { pass: false, reason: "blacklisted" };
+  }
 
-  const c = closes(k);
-  const ema20 = last(ema(c, 20));
-  const price = last(c);
-  const extension = (price - ema20) / ema20;
-  if (extension > g.MAX_EMA20_EXTENSION_PCT)
-    return {
-      pass: false,
-      reason: `overextended_${(extension * 100).toFixed(1)}pct_above_ema20`,
-    };
-
-  if (g.TIMEFRAME_CONFLUENCE_ENABLED && data.klines1d.length >= 20) {
-    const dc = closes(data.klines1d);
-    const dEma20 = last(ema(dc, 20));
-    if (last(dc) < dEma20 * 0.95) return { pass: false, reason: "macro_daily_bearish" };
+  // BTC condition: below 5m EMA(50)
+  if (data.btcKlines1h && data.btcKlines1h.length >= 50) {
+    const btcCloses = closes(data.btcKlines1h);
+    const btcEma50 = last(ema(btcCloses, 50));
+    const btcPrice = last(btcCloses);
+    if (btcPrice >= btcEma50) {
+      return { pass: false, reason: "btc_above_ema50" };
+    }
+  } else {
+    return { pass: false, reason: "insufficient_btc_history" };
   }
 
   return { pass: true, reason: "passed" };
@@ -258,97 +267,61 @@ export function scoreSymbol(
   if (!gate.pass) return empty;
 
   const k = data.klines1h;
-  const w = config.BASE_WEIGHTS;
-
-  const sRs = relativeStrengthScore(k, data.btcKlines1h);
-  const sVc = volatilityCompressionScore(k);
-  const sTs = trendStructureScore(k);
-  const sVa = volumeAccelerationScore(k);
-  const trend4h = trendOf(data.klines4h);
-  const trend1d = trendOf(data.klines1d);
-  const sMtf = trend4h === "BULLISH" ? 1 : trend4h === "BEARISH" ? 0.2 : 0.5;
-  const br = breakoutReadinessScore(k);
-  const sLs = 1;
-
-  let sOb = 0.5;
-  if (data.depth?.bids?.length && data.depth?.asks?.length) {
-    const bidVol = data.depth.bids.slice(0, 10).reduce((a, b) => a + Number(b[1]), 0);
-    const askVol =
-      data.depth.asks.slice(0, 10).reduce((a, b) => a + Number(b[1]), 0) + 1e-8;
-    sOb = clip(bidVol / askVol / 2, 0, 1);
-  }
-
-  const baseScore =
-    sRs * w.relative_strength_vs_btc +
-    sVc * w.volatility_compression +
-    sTs * w.trend_structure +
-    sVa * w.volume_acceleration +
-    sMtf * w.multi_timeframe_alignment +
-    br.score * w.breakout_readiness +
-    sLs * w.liquidity_spread +
-    sOb * w.order_book_imbalance;
-
-  const bSupport = supportBounceBoost(k, config.BOOSTS.support_bounce_boost);
-  const bRamp = volumeRampSlopeBoost(k, config.BOOSTS.volume_ramp_slope_boost);
-  const bSqueeze = squeezeExpansionBoost(
-    k,
-    config.BOOSTS.squeeze_expansion_trigger_boost,
-  );
-  const boosted = Math.min(baseScore + bSupport + bRamp + bSqueeze, 1);
-
-  const penalties: string[] = [];
-  let mult = 1;
-  if (trend4h === "BEARISH") {
-    mult *= 1 - config.PENALTIES.timeframe_conflict_penalty;
-    penalties.push("4h timeframe conflict");
-  }
   const c = closes(k);
-  const ema20 = last(ema(c, 20));
-  const extension = (last(c) - ema20) / ema20;
-  if (extension > config.GATES.MAX_EMA20_EXTENSION_PCT * 0.75) {
-    mult *= 1 - config.PENALTIES.overextension_penalty;
-    penalties.push("late-stage extension");
+  const v = volumes(k);
+  
+  // Rule 1: RSI(14) < 25
+  const rsiVals = rsi(c, 14);
+  const currentRsi = last(rsiVals);
+  if (currentRsi >= 25) {
+    return { ...empty, status: `GATED: rsi_too_high_${currentRsi.toFixed(1)}` };
   }
-  if (erraticWicks(k)) {
-    mult *= 1 - config.PENALTIES.erratic_wick_penalty;
-    penalties.push("erratic wicks");
+  
+  // Rule 2: Current volume > 1.8 * Volume SMA(20)
+  const volSma = sma(v, 20, v.length - 2); // SMA of previous 20 candles, or current? The rule says "Current volume > 1.8 * Volume SMA(20)". Let's just use sma(v, 20, v.length - 1)
+  const volSma20 = sma(v, 20, v.length - 1);
+  const currentVol = last(v);
+  if (currentVol <= 1.8 * volSma20) {
+    return { ...empty, status: `GATED: volume_too_low` };
+  }
+  
+  // Rule 3: ATR(14) % is above threshold (Fixed at 1.5% minimum for high volatility)
+  const atrVals = atr(k, 14);
+  const currentAtr = last(atrVals);
+  const atrPct = (currentAtr / price) * 100;
+  if (atrPct < 1.5) {
+    return { ...empty, status: `GATED: atr_pct_too_low_${atrPct.toFixed(2)}` };
   }
 
-  const finalScore = Math.round(boosted * mult * 100) / 100;
-
-  let stage: string;
-  if (sVc > 0.7 && sVa < 0.5) stage = "Stage 2 (Compression Squeeze)";
-  else if (br.score > 0.6 && sVa >= 0.5) stage = "Stage 3 (Breakout Readiness)";
-  else if (sRs > 0.6) stage = "Stage 1 (Quiet Accumulation)";
-  else stage = "Stage 4 (Active Expansion)";
+  // BTC Rule and Blacklist are handled in checkHardGates
 
   return {
     symbol,
     currentPrice: price,
-    finalScore,
-    baseScore: Math.round(baseScore * 100) / 100,
-    stage,
-    shouldAlert: finalScore >= config.THRESHOLDS.SCORE_ALERT_THRESHOLD,
+    finalScore: 1.0,
+    baseScore: 1.0,
+    stage: "Long-Only Signal",
+    shouldAlert: true,
     status: "OK",
     boosts: {
-      supportBounce: bSupport,
-      volumeRamp: bRamp,
-      squeezeExpansion: bSqueeze,
+      supportBounce: 0,
+      volumeRamp: 0,
+      squeezeExpansion: 0,
     },
-    penalties,
-    trend4h,
-    trend1d,
+    penalties: [],
+    trend4h: "NEUTRAL",
+    trend1d: "NEUTRAL",
     components: {
-      relativeStrength: round2(sRs),
-      volatilityCompression: round2(sVc),
-      trendStructure: round2(sTs),
-      volumeAcceleration: round2(sVa),
-      breakoutReadiness: round2(br.score),
-      orderBookImbalance: round2(sOb),
+      relativeStrength: currentRsi,
+      volatilityCompression: atrPct,
+      trendStructure: 0,
+      volumeAcceleration: currentVol / volSma20,
+      breakoutReadiness: 0,
+      orderBookImbalance: 0,
     },
     extras: {
-      distanceToHighPct: Math.round(br.distancePct * 100) / 100,
-      ema20ExtensionPct: Math.round(extension * 10000) / 100,
+      distanceToHighPct: 0,
+      ema20ExtensionPct: 0,
     },
   };
 }

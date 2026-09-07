@@ -33,16 +33,24 @@ export function initTradeEngineScheduler(): void {
   }, 5_000);
 
   // Scheduled tick every 60 seconds
+  let isEngineRunning = false;
   setInterval(async () => {
+    if (isEngineRunning) {
+      console.warn("⚡ [WEEX Engine] Previous tick still running, skipping this tick.");
+      return;
+    }
+    isEngineRunning = true;
     try {
       const res = await runTradeEngine();
       if (res.processed > 0 || res.errors > 0) {
         console.log(
-          `⚡ [WEEX Engine] Minute tick completed. Processed: ${res.processed}, Errors: ${res.errors}`,
+          `⚡ [WEEX Engine] Tick completed. Processed: ${res.processed}, Errors: ${res.errors}`,
         );
       }
     } catch (err) {
-      console.error("⚡ [WEEX Engine] Minute tick error:", err);
+      console.error("⚡ [WEEX Engine] Tick error:", err);
+    } finally {
+      isEngineRunning = false;
     }
   }, 60_000);
 }

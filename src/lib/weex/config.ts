@@ -12,6 +12,10 @@ function parseEnvNum(key: string, fallback: number): number {
 }
 
 export const WEEX_CONFIG = {
+  /** Minimum order value in USD to prevent WEEX -1058 min notional/lot step rejection. */
+  get MIN_ORDER_NOTIONAL_USD(): number {
+    return parseEnvNum("MIN_ORDER_NOTIONAL_USD", 15.0);
+  },
   /** Fixed Notional Position Value ($140.00 USD total across 2 tranches). */
   get NOTIONAL_POSITION_USD(): number {
     return parseEnvNum("NOTIONAL_POSITION_USD", parseEnvNum("NOTIONAL_USD", 140.0));
@@ -46,23 +50,23 @@ export const WEEX_CONFIG = {
   },
   /** Stop loss offset from the limit entry fill. */
   get STOP_OFFSET(): number {
-    return parseEnvNum("STOP_OFFSET", -0.015);
+    return parseEnvNum("STOP_OFFSET", -0.035);
   },
   /** Initial TP1 offset (+2.0%). */
   get TP1_OFFSET(): number {
-    return parseEnvNum("TP1_OFFSET", 0.020);
+    return parseEnvNum("TP1_OFFSET", 0.035);
   },
   /** Runner TP2 offset (+3.5% default, up to +5.0%). */
   get TP2_OFFSET(): number {
-    return parseEnvNum("TP2_OFFSET", parseEnvNum("TARGET_OFFSET", 0.035));
+    return parseEnvNum("TP2_OFFSET", parseEnvNum("TARGET_OFFSET", 0.060));
   },
   /** Break-even stop loss trigger offset (+1.5% MFE). */
   get BREAKEVEN_TRIGGER_OFFSET(): number {
-    return parseEnvNum("BREAKEVEN_TRIGGER_OFFSET", 0.015);
+    return parseEnvNum("BREAKEVEN_TRIGGER_OFFSET", 0.030);
   },
   /** Take profit offset from the limit entry fill (legacy target alias). */
   get TARGET_OFFSET(): number {
-    return parseEnvNum("TARGET_OFFSET", 0.035);
+    return parseEnvNum("TARGET_OFFSET", 0.060);
   },
   /** Cancel an unfilled limit buy after this many hours. */
   get ORDER_EXPIRY_HOURS(): number {
@@ -70,7 +74,7 @@ export const WEEX_CONFIG = {
   },
   /** Hard market close this long after the entry fills. */
   get TIME_EXIT_MINUTES(): number {
-    return parseEnvNum("TIME_EXIT_MINUTES", 60);
+    return parseEnvNum("TIME_EXIT_MINUTES", 180);
   },
   /** Dynamic leverage used for position (5x). */
   LEVERAGE: 5,

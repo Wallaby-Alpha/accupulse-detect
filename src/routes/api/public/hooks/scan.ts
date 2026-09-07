@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   isStageOne,
   passesMoverFilter,
+  passesQualityFilter,
   MAJOR_CAP_EXCLUSIONS,
   MOVER_LOOKBACK_ALERTS,
   RUNUP_TRACKING_HOURS,
@@ -21,7 +22,7 @@ import {
 import { checkHardGates, scoreSymbol, type ScoreResult } from "@/lib/scanner/scoring";
 import { formatAlert, sendTelegramMessage } from "@/lib/scanner/telegram";
 
-const INTERVAL_1H = "60m";
+const INTERVAL_5M = "5m";
 
 export async function runScan() {
   const started = Date.now();
@@ -32,13 +33,13 @@ export async function runScan() {
   const btcTicker = tickerBySymbol.get("BTCUSDT");
   const universe = buildUniverse(tickers, cfg.SCAN_CONFIG.UNIVERSE_SIZE);
 
-  const btcKlines1h = await fetchKlines("BTCUSDT", INTERVAL_1H, 200);
+  const btcKlines1h = await fetchKlines("BTCUSDT", INTERVAL_5M, 200);
 
   type Candidate = { ticker: Ticker; k1h: Kline[]; k4h: Kline[]; k1d: Kline[] };
 
   const fetched = await mapLimit(universe, 3, async (t): Promise<Candidate | null> => {
     if (Number(t.quoteVolume) < cfg.GATES.MIN_24H_VOLUME_USD) return null;
-    const k1h = await fetchKlines(t.symbol, INTERVAL_1H, 200);
+    const k1h = await fetchKlines(t.symbol, INTERVAL_5M, 200);
     if (k1h.length < cfg.GATES.MIN_LOOKBACK_CANDLES) return null;
 
     // Cheap pre-gate before spending two more requests per symbol.
@@ -142,34 +143,19 @@ export async function runScan() {
     /* ignore missing table error */
   }
 
-  // Dispatch gate: Stage 1 only, no major caps, no chronic flatliners.
-  const stageOne = finalResults.filter(
-    (r) =>
-      r.shouldAlert &&
-      isStageOne(r.stage) &&
-      !onCooldown.has(r.symbol) &&
-      !MAJOR_CAP_EXCLUSIONS.has(r.symbol),
-  );
-
-  const toAlert: ScoreResult[] = [];
-  for (const r of stageOne) {
-    if (toAlert.length >= cfg.THRESHOLDS.TOP_COINS_PER_SCAN) break;
-    let runups: number[] = [];
-    try {
-      const { data: history, error: histErr } = await supabaseAdmin
-        .from("alert_history")
-        .select("max_runup_pct")
-        .eq("symbol", r.symbol)
-        .order("alerted_at", { ascending: false })
-        .limit(MOVER_LOOKBACK_ALERTS);
-      if (!histErr && Array.isArray(history)) {
-        runups = history.map((h) => Number(h.max_runup_pct));
-      }
-    } catch {
-      /* fallback */
+  // Dispatch gate: Apply backtest-optimized quality filter, cooldown & exclusion guards
+  const stageOne = finalResults.filter((r) => {
+    if (!r.shouldAlert) return false;
+    if (onCooldown.has(r.symbol)) return false;
+    const q = passesQualityFilter(r);
+    if (!q.pass) {
+      console.log(`[SCANNER FILTER] ${r.symbol} rejected: ${q.reason}`);
+      return false;
     }
-    if (passesMoverFilter(runups)) toAlert.push(r);
-  }
+    return true;
+  });
+
+  const toAlert: ScoreResult[] = stageOne.slice(0, cfg.THRESHOLDS.TOP_COINS_PER_SCAN);
 
   const { registerSignal } = await import("@/lib/weex/engine.server");
 

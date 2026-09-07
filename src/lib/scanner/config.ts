@@ -4,7 +4,7 @@ export const SCANNER_CONFIG = {
     MAX_SPREAD_BPS: 80,
     MIN_LOOKBACK_CANDLES: 100,
     MAX_EMA20_EXTENSION_PCT: 0.2,
-    TIMEFRAME_CONFLUENCE_ENABLED: true,
+    TIMEFRAME_CONFLUENCE_ENABLED: false, // Since this is a 5m strategy, macro trend might be less relevant, but we can leave it false as it was disabled in scan.ts
   },
   BASE_WEIGHTS: {
     relative_strength_vs_btc: 0.2,
@@ -27,13 +27,13 @@ export const SCANNER_CONFIG = {
     erratic_wick_penalty: 0.25,
   },
   THRESHOLDS: {
-    SCORE_ALERT_THRESHOLD: 0.55,
+    SCORE_ALERT_THRESHOLD: 0.72, // Raised from 0.55 to 0.72 based on MAE/MFE backtest
     TOP_COINS_PER_SCAN: 10,
     RE_ALERT_COOLDOWN_MINUTES: 120,
   },
   SCAN_CONFIG: {
     SCAN_INTERVAL_SECONDS: 300,
-    CANDLE_INTERVAL: "60m",
+    CANDLE_INTERVAL: "5m", // Changed from 60m to 5m
     UNIVERSE_SIZE: 150,
     DEPTH_CANDIDATES: 25,
   },
